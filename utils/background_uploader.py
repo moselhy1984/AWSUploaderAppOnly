@@ -2,11 +2,12 @@
 # -*- coding: utf-8 -*-
 
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 import boto3
 from botocore.exceptions import ClientError
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtCore import QThread, pyqtSignal, QMutex, QMutexLocker
 
 class BackgroundUploader(QThread):
     """
@@ -31,12 +32,36 @@ class BackgroundUploader(QThread):
         self.photographers = photographers
         self.local_path = local_path
         self._is_running = True
+        self._is_paused = False  # متغير حالة الإيقاف المؤقت
+        self._pause_mutex = QMutex()  # mutex للتزامن
         self.uploaded_file_count = 0
         self.skipped_file_count = 0
-
+        self.completed_files = []  # قائمة بالملفات التي تم تحميلها
+        self.current_file_index = 0  # مؤشر الملف الحالي للاستئناف
+    
     def stop(self):
         """Stop the upload process"""
         self._is_running = False
+        
+    def pause(self):
+        """Pause the upload process"""
+        # استخدام QMutexLocker للتعامل الآمن مع المتغيرات المشتركة
+        locker = QMutexLocker(self._pause_mutex)
+        self._is_paused = True
+        self.log.emit("Upload paused. Task will complete current file and then wait.")
+        
+    def resume(self):
+        """Resume the paused upload process"""
+        # استخدام QMutexLocker للتعامل الآمن مع المتغيرات المشتركة
+        locker = QMutexLocker(self._pause_mutex)
+        self._is_paused = False
+        self.log.emit("Upload resumed.")
+        
+    def is_paused(self):
+        """Check if the uploader is paused"""
+        # استخدام QMutexLocker للتعامل الآمن مع المتغيرات المشتركة
+        locker = QMutexLocker(self._pause_mutex)
+        return self._is_paused
 
     def run(self):
         """Main method that runs in the background thread"""
@@ -123,15 +148,29 @@ class BackgroundUploader(QThread):
             uploaded_files = self.get_uploaded_files(self.order_number)
             uploaded_file_keys = set(uploaded_files)
             
+            # إضافة: تعيين الملفات المكتملة سابقًا
+            self.completed_files = list(uploaded_file_keys)
+            
             processed_files = 0
             uploaded_files = 0
             skipped_files = 0
             
             # Process all files with duplicate detection
-            for file_info in all_files:
+            for i, file_info in enumerate(all_files):
+                # التحقق من حالة الإيقاف
+                while self.is_paused():
+                    # انتظار أثناء وضع الإيقاف المؤقت
+                    time.sleep(0.5)  # انتظار نصف ثانية قبل التحقق مرة أخرى
+                    if not self._is_running:  # التحقق مما إذا تم إيقاف المهمة أثناء الإيقاف المؤقت
+                        self.log.emit("Upload cancelled while paused")
+                        break
+                
                 if not self._is_running:
                     self.log.emit("Upload cancelled")
                     break
+                
+                # حفظ موقع الملف الحالي للاستئناف
+                self.current_file_index = i
                 
                 local_path = file_info['local_path']
                 s3_key = file_info['s3_key']
@@ -162,9 +201,16 @@ class BackgroundUploader(QThread):
                         'status': 'skipped'
                     })
                     
+                    # Add to completed files
+                    self.completed_files.append(s3_key)
+                    
                 except ClientError as e:
                     # File doesn't exist, proceed with upload
                     try:
+                        # التحقق مرة أخرى من حالة الإيقاف قبل رفع ملف كبير
+                        if self.is_paused():
+                            continue
+                            
                         if file_size > 100 * 1024 * 1024:  # 100MB
                             # Use multipart upload for large files
                             multipart_config = {
@@ -199,6 +245,9 @@ class BackgroundUploader(QThread):
                             'file_type': category,
                             'status': 'uploaded'
                         })
+                        
+                        # Add to completed files
+                        self.completed_files.append(s3_key)
                         
                     except ClientError as upload_err:
                         error_msg = str(upload_err)
@@ -269,7 +318,10 @@ class BackgroundUploader(QThread):
                     import traceback
                     self.log.emit(traceback.format_exc())
                 
-                self.log.emit(f"Upload complete. {uploaded_files} files uploaded, {skipped_files} files skipped.")
+                if not self.is_paused():  # إبلاغ "اكتمال الرفع" فقط إذا لم يكن في وضع الإيقاف المؤقت
+                    self.log.emit(f"Upload complete. {uploaded_files} files uploaded, {skipped_files} files skipped.")
+                else:
+                    self.log.emit(f"Upload paused. {uploaded_files} files uploaded, {skipped_files} files skipped so far.")
             
             self.finished.emit()
             
