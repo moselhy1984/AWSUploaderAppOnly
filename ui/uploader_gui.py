@@ -54,11 +54,11 @@ class S3UploaderGUI(QMainWindow):
         # List to track multiple upload tasks
         self.upload_tasks = []
         
-        self.init_ui()  # تغيير لاستخدام snake_case
+        self.init_ui()
         self.uploader = None
         self.setup_tray()
     
-    def init_ui(self):  # تغيير لاستخدام snake_case
+    def init_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle('Secure File Uploader')
         self.setGeometry(100, 100, 900, 700)
@@ -171,6 +171,7 @@ class S3UploaderGUI(QMainWindow):
         
         self.task_list = QListWidget()
         self.task_list.setMinimumHeight(150)
+        self.task_list.itemSelectionChanged.connect(self.on_task_selected)  # إضافة هذا السطر للتحكم في الأزرار
         upload_layout.addWidget(self.task_list)
         
         # Progress bar and buttons
@@ -183,6 +184,18 @@ class S3UploaderGUI(QMainWindow):
         self.start_all_btn = QPushButton('Start All Tasks')
         self.start_all_btn.clicked.connect(self.start_all_tasks)
         self.start_all_btn.setEnabled(False)
+        # أزرار جديدة للإيقاف المؤقت والاستئناف وإعادة التشغيل
+        self.pause_btn = QPushButton('Pause Task')
+        self.pause_btn.clicked.connect(self.pause_selected_task)
+        self.pause_btn.setEnabled(False)
+        
+        self.resume_btn = QPushButton('Resume Task')
+        self.resume_btn.clicked.connect(self.resume_selected_task)
+        self.resume_btn.setEnabled(False)
+        
+        self.restart_btn = QPushButton('Restart Task')
+        self.restart_btn.clicked.connect(self.restart_selected_task)
+        self.restart_btn.setEnabled(False)
         
         self.cancel_btn = QPushButton('Cancel Selected')
         self.cancel_btn.clicked.connect(self.cancel_selected_task)
@@ -190,6 +203,9 @@ class S3UploaderGUI(QMainWindow):
         
         button_layout.addWidget(self.upload_btn)
         button_layout.addWidget(self.start_all_btn)
+        button_layout.addWidget(self.pause_btn)
+        button_layout.addWidget(self.resume_btn)
+        button_layout.addWidget(self.restart_btn)
         button_layout.addWidget(self.cancel_btn)
         
         upload_layout.addWidget(self.progress_bar)
@@ -581,6 +597,10 @@ class S3UploaderGUI(QMainWindow):
         if source_folder:
             self.organize_files(source_folder, task['local_path'])
         
+        # قبل بدء الرافع، نحتاج لتأكد من أنه لم يتم إيقافه مؤقتًا
+        task['paused_state'] = False  # حالة الإيقاف المؤقت
+        task['completed_files'] = []  # لتتبع الملفات المكتملة (للاستئناف)
+        
         # Create a new uploader for this task
         uploader = BackgroundUploader(
             folder_path=task['folder_path'],
@@ -607,10 +627,171 @@ class S3UploaderGUI(QMainWindow):
         # Update the list item
         task['item'].setText(f"Task {task['id']}: Order {task['order_number']} - Running (0%)")
         
+        # تمكين زر الإيقاف المؤقت
+        self.pause_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(True)
+        
         # Start the uploader
         uploader.start()
         
         self.log_message(f"Started upload task {task['id']} for order {task['order_number']}")
+    
+    def pause_selected_task(self):
+        """Pause the selected upload task"""
+        selected_items = self.task_list.selectedItems()
+        if not selected_items:
+            QMessageBox.information(self, "Information", "No task selected")
+            return
+        
+        for item in selected_items:
+            task_data = item.data(Qt.UserRole)
+            task_id = task_data['id']
+            
+            # Find the task
+            task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
+            if not task:
+                continue
+            
+            # Only allow pausing running tasks
+            if task['status'] != 'running':
+                self.log_message(f"Can't pause task {task_id} because it's not running")
+                continue
+            
+            # Set the pause flag on the uploader
+            if task['uploader']:
+                # Implement the pause feature in BackgroundUploader
+                task['uploader'].pause()
+                task['paused_state'] = True
+                
+                # Update task status
+                task['status'] = 'paused'
+                
+                # Update the list item
+                item.setText(f"Task {task_id}: Order {task['order_number']} - Paused ({task['progress']}%)")
+                
+                self.log_message(f"Paused upload task {task_id}")
+                
+                # Enable the resume button and disable the pause button
+                self.resume_btn.setEnabled(True)
+                self.pause_btn.setEnabled(False)
+
+    def resume_selected_task(self):
+        """Resume the paused upload task"""
+        selected_items = self.task_list.selectedItems()
+        if not selected_items:
+            QMessageBox.information(self, "Information", "No task selected")
+            return
+        
+        for item in selected_items:
+            task_data = item.data(Qt.UserRole)
+            task_id = task_data['id']
+            
+            # Find the task
+            task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
+            if not task:
+                continue
+            
+            # Only allow resuming paused tasks
+            if task['status'] != 'paused':
+                self.log_message(f"Can't resume task {task_id} because it's not paused")
+                continue
+            
+            # Reset the pause flag on the uploader
+            if task['uploader']:
+                # Implement the resume feature in BackgroundUploader
+                task['uploader'].resume()
+                task['paused_state'] = False
+                
+                # Update task status
+                task['status'] = 'running'
+                
+                # Update the list item
+                item.setText(f"Task {task_id}: Order {task['order_number']} - Running ({task['progress']}%)")
+                
+                self.log_message(f"Resumed upload task {task_id}")
+                
+                # Enable the pause button and disable the resume button
+                self.pause_btn.setEnabled(True)
+                self.resume_btn.setEnabled(False)
+
+    def restart_selected_task(self):
+        """Restart a completed or cancelled upload task"""
+        selected_items = self.task_list.selectedItems()
+        if not selected_items:
+            QMessageBox.information(self, "Information", "No task selected")
+            return
+        
+        for item in selected_items:
+            task_data = item.data(Qt.UserRole)
+            task_id = task_data['id']
+            
+            # Find the task
+            task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
+            if not task:
+                continue
+            
+            # Only allow restarting completed or cancelled tasks
+            if task['status'] not in ['completed', 'cancelled']:
+                self.log_message(f"Can't restart task {task_id} because it's still active")
+                continue
+            
+            # Reset task properties
+            task['status'] = 'pending'
+            task['progress'] = 0
+            task['completed_files'] = []
+            
+            # Update the list item
+            item.setText(f"Task {task_id}: Order {task['order_number']} - Pending")
+            
+            self.log_message(f"Reset upload task {task_id}, ready to restart")
+            
+            # Start the task immediately
+            self.start_task(task)
+            
+            # Enable the pause button
+            self.pause_btn.setEnabled(True)
+            self.resume_btn.setEnabled(False)
+            self.restart_btn.setEnabled(False)
+    def on_task_selected(self):
+        """Handle task selection to enable/disable appropriate buttons"""
+        selected_items = self.task_list.selectedItems()
+        if not selected_items:
+            # إذا لم يتم تحديد أي مهمة، قم بتعطيل جميع الأزرار المتعلقة بالمهام
+            self.cancel_btn.setEnabled(False)
+            self.pause_btn.setEnabled(False)
+            self.resume_btn.setEnabled(False)
+            self.restart_btn.setEnabled(False)
+            return
+        
+        # الحصول على المهمة المحددة
+        task_data = selected_items[0].data(Qt.UserRole)
+        task_id = task_data['id']
+        task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
+        
+        if not task:
+            return
+        
+        # تمكين/تعطيل الأزرار بناءً على حالة المهمة
+        if task['status'] == 'running':
+            self.cancel_btn.setEnabled(True)
+            self.pause_btn.setEnabled(True)
+            self.resume_btn.setEnabled(False)
+            self.restart_btn.setEnabled(False)
+        elif task['status'] == 'paused':
+            self.cancel_btn.setEnabled(True)
+            self.pause_btn.setEnabled(False)
+            self.resume_btn.setEnabled(True)
+            self.restart_btn.setEnabled(False)
+        elif task['status'] in ['completed', 'cancelled']:
+            self.cancel_btn.setEnabled(False)
+            self.pause_btn.setEnabled(False)
+            self.resume_btn.setEnabled(False)
+            self.restart_btn.setEnabled(True)
+        elif task['status'] == 'pending':
+            self.cancel_btn.setEnabled(True)
+            self.pause_btn.setEnabled(False)
+            self.resume_btn.setEnabled(False)
+            self.restart_btn.setEnabled(False)
     
     def update_task_progress(self, task_id, current, total):
         """
@@ -667,6 +848,9 @@ class S3UploaderGUI(QMainWindow):
         
         # Update the list item
         task['item'].setText(f"Task {task['id']}: Order {task['order_number']} - Completed")
+        
+        # Enable restart button for completed tasks
+        self.restart_btn.setEnabled(True)
         
         # Check if all tasks are completed
         if all(t['status'] in ['completed', 'cancelled'] for t in self.upload_tasks):
