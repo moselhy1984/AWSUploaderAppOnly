@@ -8,7 +8,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
                             QPushButton, QDateEdit, QFileDialog, QMessageBox, 
                             QGroupBox, QFormLayout)
-from PyQt5.QtCore import Qt, QDate
+from PyQt5.QtCore import Qt, QDate  # تأكد من استيراد QDate هنا
 
 from ui.photographers_dialog import PhotographersDialog
 from ui.order_selector_dialog import OrderSelectorDialog
@@ -83,6 +83,7 @@ class TaskEditorDialog(QDialog):
         order_layout_h = QHBoxLayout()
         self.order_number = QLineEdit()
         self.order_number.setPlaceholderText("Enter or select order number")
+        self.order_number.setEnabled(False)  # Disable by default
         order_layout_h.addWidget(self.order_number)
         
         select_order_btn = QPushButton("Select")
@@ -181,7 +182,6 @@ class TaskEditorDialog(QDialog):
             self.order_date.setDate(self.task_data['order_date'])
         else:
             # If it's a Python date object
-            from PyQt5.QtCore import QDate
             qdate = QDate(
                 self.task_data['order_date'].year,
                 self.task_data['order_date'].month,
@@ -191,6 +191,7 @@ class TaskEditorDialog(QDialog):
         
         # Set order number
         self.order_number.setText(self.task_data['order_number'])
+        self.order_number.setEnabled(True)  # Enable the field in edit mode
         
         # Set folder path
         self.folder_path.setText(self.task_data['folder_path'])
@@ -203,9 +204,14 @@ class TaskEditorDialog(QDialog):
         if not self.is_edit_mode:
             # Clear order number in add mode
             self.order_number.setText("")
+            # Disable the order number field when date changes
+            self.order_number.setEnabled(False)
     
     def select_order(self):
         """Open order selection dialog"""
+        # Enable the order number field when the select button is clicked
+        self.order_number.setEnabled(True)
+        
         # Set the selected date in the database manager
         selected_date = self.order_date.date().toPyDate().strftime('%Y-%m-%d')
         self.db_manager.selected_date = selected_date
@@ -213,7 +219,20 @@ class TaskEditorDialog(QDialog):
         # Get orders for the selected date
         orders = self.db_manager.get_todays_orders()
         if not orders:
-            QMessageBox.information(self, "Information", f"No orders found for {selected_date}")
+            # No orders found, ask if user wants to enter manually
+            reply = QMessageBox.question(
+                self, 
+                "No Orders Found", 
+                f"No orders found for {selected_date}. Would you like to enter an order number manually?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            
+            if reply == QMessageBox.Yes:
+                self.order_number.setFocus()
+            else:
+                # If user chooses not to enter manually, disable the field again
+                self.order_number.setEnabled(False)
             return
             
         # User wants to select from existing orders
@@ -226,6 +245,10 @@ class TaskEditorDialog(QDialog):
                 # Auto create folder structure if not in edit mode
                 if not self.is_edit_mode:
                     self.auto_create_path()
+        else:
+            # If user cancels the dialog without selecting, disable the field again
+            if not self.order_number.text():
+                self.order_number.setEnabled(False)
     
     def select_photographers(self):
         """Open photographer selection dialog"""
@@ -439,7 +462,7 @@ class TaskEditorDialog(QDialog):
             return
         
         # If in edit mode and new folder path is specified, move files
-        if self.is_edit_mode and self.new_folder_path.text():
+        if self.is_edit_mode and hasattr(self, 'new_folder_path') and self.new_folder_path.text():
             source_path = Path(self.task_data['folder_path'])
             target_path = Path(self.new_folder_path.text())
             
