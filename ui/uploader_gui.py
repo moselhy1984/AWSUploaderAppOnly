@@ -19,6 +19,7 @@ from PyQt5.QtGui import QIcon
 from ui.photographers_dialog import PhotographersDialog
 from ui.order_selector_dialog import OrderSelectorDialog
 from ui.image_preview_dialog import ImagePreviewDialog
+from ui.task_editor_dialog import TaskEditorDialog
 from utils.background_uploader import BackgroundUploader
 
 class S3UploaderGUI(QMainWindow):
@@ -86,23 +87,7 @@ class S3UploaderGUI(QMainWindow):
         upload_tab = QWidget()
         upload_layout = QVBoxLayout()
         
-        # Source folder selection
-        folder_frame = QFrame()
-        folder_layout = QHBoxLayout()
-        
-        self.folder_path = QLineEdit()
-        self.folder_path.setPlaceholderText("Select folder...")
-        self.folder_path.setReadOnly(True)
-        browse_btn = QPushButton('Browse')
-        browse_btn.clicked.connect(self.browse_folder)
-        
-        folder_layout.addWidget(QLabel('Source Folder:'))
-        folder_layout.addWidget(self.folder_path)
-        folder_layout.addWidget(browse_btn)
-        folder_frame.setLayout(folder_layout)
-        upload_layout.addWidget(folder_frame)
-        
-        # Local storage path
+        # Local storage path (only field kept from original UI)
         storage_frame = QFrame()
         storage_layout = QHBoxLayout()
         
@@ -119,51 +104,18 @@ class S3UploaderGUI(QMainWindow):
         storage_frame.setLayout(storage_layout)
         upload_layout.addWidget(storage_frame)
         
-        # Order selection
-        order_frame = QFrame()
-        order_layout = QHBoxLayout()
+        # Add big Upload Photoshoot button in place of removed task details
+        upload_photoshoot_frame = QFrame()
+        upload_photoshoot_layout = QVBoxLayout()
         
-        self.order_number = QLineEdit()
-        self.order_number.setPlaceholderText("Enter or select order number")
-        # Allow manual entry of order numbers
-        self.order_number.setReadOnly(False)
-        # Connect textChanged signal to validate manual entry
-        self.order_number.textChanged.connect(self.validate_order_number_entry)
+        self.upload_photoshoot_btn = QPushButton('Upload Photoshoot')
+        self.upload_photoshoot_btn.setMinimumHeight(50)  # Make button bigger
+        self.upload_photoshoot_btn.setStyleSheet("font-size: 14pt;")  # Larger font
+        self.upload_photoshoot_btn.clicked.connect(self.add_photoshoot_task)
         
-        self.order_date = QDateEdit()
-        self.order_date.setCalendarPopup(True)
-        self.order_date.setDate(QDate.currentDate())
-        self.order_date.dateChanged.connect(self.date_changed)
-        
-        select_order_btn = QPushButton('Select Order')
-        select_order_btn.clicked.connect(self.select_order)
-        
-        order_layout.addWidget(QLabel('Order Date:'))
-        order_layout.addWidget(self.order_date)
-        order_layout.addWidget(QLabel('Order Number:'))
-        order_layout.addWidget(self.order_number)
-        order_layout.addWidget(select_order_btn)
-        
-        order_frame.setLayout(order_layout)
-        upload_layout.addWidget(order_frame)
-        
-        # Photographer selection
-        photographer_frame = QFrame()
-        photographer_layout = QHBoxLayout()
-        
-        self.photographer_info = QLineEdit()
-        self.photographer_info.setPlaceholderText("Select photographers...")
-        self.photographer_info.setReadOnly(True)
-        
-        select_photographer_btn = QPushButton('Select Photographers')
-        select_photographer_btn.clicked.connect(self.select_photographers)
-        
-        photographer_layout.addWidget(QLabel('Photographers:'))
-        photographer_layout.addWidget(self.photographer_info)
-        photographer_layout.addWidget(select_photographer_btn)
-        
-        photographer_frame.setLayout(photographer_layout)
-        upload_layout.addWidget(photographer_frame)
+        upload_photoshoot_layout.addWidget(self.upload_photoshoot_btn)
+        upload_photoshoot_frame.setLayout(upload_photoshoot_layout)
+        upload_layout.addWidget(upload_photoshoot_frame)
         
         # Task list for multiple uploads
         task_list_label = QLabel("Upload Tasks:")
@@ -171,20 +123,24 @@ class S3UploaderGUI(QMainWindow):
         
         self.task_list = QListWidget()
         self.task_list.setMinimumHeight(150)
-        self.task_list.itemSelectionChanged.connect(self.on_task_selected)  # إضافة هذا السطر للتحكم في الأزرار
+        self.task_list.itemSelectionChanged.connect(self.on_task_selected)
         upload_layout.addWidget(self.task_list)
         
         # Progress bar and buttons
         self.progress_bar = QProgressBar()
         
         button_layout = QHBoxLayout()
-        self.upload_btn = QPushButton('Add Upload Task')
-        self.upload_btn.clicked.connect(self.add_upload_task)
+        
+        # Use Modify Task button in place of Add Upload Task
+        self.modify_task_btn = QPushButton('Modify Task')
+        self.modify_task_btn.clicked.connect(self.modify_selected_task)
+        self.modify_task_btn.setEnabled(False)
         
         self.start_all_btn = QPushButton('Start All Tasks')
         self.start_all_btn.clicked.connect(self.start_all_tasks)
         self.start_all_btn.setEnabled(False)
-        # أزرار جديدة للإيقاف المؤقت والاستئناف وإعادة التشغيل
+        
+        # Buttons for pause, resume, restart
         self.pause_btn = QPushButton('Pause Task')
         self.pause_btn.clicked.connect(self.pause_selected_task)
         self.pause_btn.setEnabled(False)
@@ -201,7 +157,8 @@ class S3UploaderGUI(QMainWindow):
         self.cancel_btn.clicked.connect(self.cancel_selected_task)
         self.cancel_btn.setEnabled(False)
         
-        button_layout.addWidget(self.upload_btn)
+        # Add buttons in logical order
+        button_layout.addWidget(self.modify_task_btn)
         button_layout.addWidget(self.start_all_btn)
         button_layout.addWidget(self.pause_btn)
         button_layout.addWidget(self.resume_btn)
@@ -253,7 +210,7 @@ class S3UploaderGUI(QMainWindow):
     def setup_tray(self):
         """Setup system tray icon and menu"""
         self.tray_icon = QSystemTrayIcon(self)
-        icon_path = os.path.join(os.path.dirname(__file__), '..', 'icon.png')
+        icon_path = os.path.join(os.path.dirname(__file__), '..', 'icon.ico')
         if os.path.exists(icon_path):
             self.tray_icon.setIcon(QIcon(icon_path))
         else:
@@ -273,13 +230,6 @@ class S3UploaderGUI(QMainWindow):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.log_text.append(f"[{timestamp}] {message}")
     
-    def browse_folder(self):
-        """Browse for source folder"""
-        folder = QFileDialog.getExistingDirectory(self, 'Select Source Folder')
-        if folder:
-            self.folder_path.setText(folder)
-            self.analyze_folder(folder)
-    
     def browse_local_storage(self):
         """Browse for local storage location"""
         folder = QFileDialog.getExistingDirectory(self, 'Select Local Storage Location')
@@ -289,288 +239,169 @@ class S3UploaderGUI(QMainWindow):
             self.settings.setValue("local_storage_path", folder)
             self.log_message(f"Local storage location set to: {folder}")
     
-    def validate_order_number_entry(self):
-        """Validate manually entered order number"""
-        # This method can be implemented to validate the order number format
-        # For now, it's just a placeholder
-        pass
-    
-    def date_changed(self):
-        """Handle date selection changes"""
-        # When date changes, clear the order number
-        self.order_number.setText("")
-        
-        # Check if there are orders for the selected date
-        selected_date = self.order_date.date().toPyDate().strftime('%Y-%m-%d')
-        self.db_manager.selected_date = selected_date
-        orders = self.db_manager.get_todays_orders()
-        
-        # If there are orders, make the order number field read-only
-        # Otherwise, allow manual entry
-        if orders:
-            self.order_number.setReadOnly(True)
-            self.log_message(f"Found {len(orders)} orders for {selected_date}. Use 'Select Order' to choose one.")
-        else:
-            self.order_number.setReadOnly(False)
-            self.log_message(f"No orders found for {selected_date}. You can enter an order number manually.")
-    
-    def select_order(self):
-        """Open order selection dialog"""
-        # Set the selected date in the database manager
-        selected_date = self.order_date.date().toPyDate().strftime('%Y-%m-%d')
-        self.db_manager.selected_date = selected_date
-        
-        # Get orders for the selected date
-        orders = self.db_manager.get_todays_orders()
-        if not orders:
-            QMessageBox.information(self, "Information", f"No orders found for {selected_date}")
-            # Allow manual entry since there are no orders
-            self.order_number.setReadOnly(False)
-            self.log_message(f"No orders found for {selected_date}. You can enter an order number manually.")
-            return
-            
-        # Check if the user wants to enter a manual order number instead
-        manual_entry = QMessageBox.question(
-            self, 
-            "Manual Entry", 
-            f"There are {len(orders)} orders for {selected_date}. Do you want to select from existing orders or enter a new order number manually?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes
-        )
-        
-        if manual_entry == QMessageBox.No:  # User wants to enter manually
-            self.order_number.setReadOnly(False)
-            self.log_message("Manual order number entry enabled.")
-            return
-            
-        # User wants to select from existing orders
-        dialog = OrderSelectorDialog(orders, self)
-        if dialog.exec_() == QDialog.Accepted:
-            selected_order_number = dialog.get_selected_order_id()
-            if selected_order_number:
-                self.order_number.setText(str(selected_order_number))
-                
-                # Create folder structure and set it as source
-                order_path = self.create_local_folders(selected_order_number)
-                if order_path:
-                    self.current_order_path = order_path
-                    self.folder_path.setText(str(order_path))
-                    
-                    # Open the folder for the user
-                    self.open_folder(order_path)
-    
-    def select_photographers(self):
-        """Open photographer selection dialog"""
-        photographers = self.db_manager.get_photographers()
-        if not photographers:
-            QMessageBox.warning(self, "Warning", "Could not fetch photographer list from database")
-            return
-        
-        dialog = PhotographersDialog(photographers, self)
-        if dialog.exec_() == QDialog.Accepted:
-            self.photographers = dialog.get_selected_photographers()
-            
-            # Update the display
-            photographer_text = []
-            
-            for photographer in photographers:
-                if photographer['Emp_ID'] == self.photographers['main']:
-                    photographer_text.append(f"Main: {photographer['Emp_FullName']}")
-            
-            for photographer in photographers:
-                if photographer['Emp_ID'] == self.photographers['assistant']:
-                    photographer_text.append(f"Assistant: {photographer['Emp_FullName']}")
-            
-            for photographer in photographers:
-                if photographer['Emp_ID'] == self.photographers['video']:
-                    photographer_text.append(f"Video: {photographer['Emp_FullName']}")
-            
-            if photographer_text:
-                self.photographer_info.setText(", ".join(photographer_text))
-            else:
-                self.photographer_info.setText("")
-    
-    def create_local_folders(self, order_number):
-        """
-        Create folder structure for the selected order
-        
-        Args:
-            order_number (str): Order number
-            
-        Returns:
-            Path: Path to created folder structure or None if failed
-        """
+    def add_photoshoot_task(self):
+        """Open dialog for adding a new photoshoot upload task"""
         if not self.local_storage_path:
             QMessageBox.warning(self, "Warning", "Please select a local storage location first")
             self.browse_local_storage()
             if not self.local_storage_path:
-                return None
+                return
         
-        date_obj = self.order_date.date().toPyDate()
-        year = date_obj.year
-        month = f"{date_obj.month:02d}-{year}"
-        day = f"{date_obj.day:02d}-{month}"
-        
-        # Create folder structure
-        base_path = Path(self.local_storage_path) / str(year) / month / day / f"Order_{order_number}"
-        
-        # Create the main folders
-        folders = [
-            base_path / "CR2",
-            base_path / "JPG",
-            base_path / "Reels/Videos"
-        ]
-        
-        for folder in folders:
-            folder.mkdir(parents=True, exist_ok=True)
-            self.log_message(f"Created folder: {folder}")
-        
-        return base_path
-    
-    def open_folder(self, folder_path):
-        """
-        Open the folder in the default file explorer
-        
-        Args:
-            folder_path (Path): Path to open
-        """
-        try:
-            folder_str = str(folder_path)
-            if sys.platform == 'win32':
-                os.startfile(folder_str)
-            elif sys.platform == 'darwin':  # macOS
-                import subprocess
-                subprocess.Popen(['open', folder_str])
-            else:  # Linux
-                import subprocess
-                subprocess.Popen(['xdg-open', folder_str])
-                
-            self.log_message(f"Opened folder: {folder_str}")
-        except Exception as e:
-            self.log_message(f"Error opening folder: {str(e)}")
-    
-    def analyze_folder(self, folder_path):
-        """
-        Analyze the source folder and categorize files
-        
-        Args:
-            folder_path (str): Path to analyze
+        dialog = TaskEditorDialog(self.db_manager, self.local_storage_path, parent=self)
+        if dialog.exec_() == QDialog.Accepted:
+            # Get task data from dialog
+            task_data = dialog.get_task_data()
             
-        Returns:
-            dict: Dictionary with file extension statistics
-        """
-        extensions = {}
-        file_count = 0
-        total_size = 0
-        
-        for path in Path(folder_path).rglob('*'):
-            if path.is_file():
-                ext = path.suffix[1:].upper() or 'NO_EXTENSION'
-                size = path.stat().st_size
-                
-                if ext not in extensions:
-                    extensions[ext] = {
-                        'count': 0,
-                        'size': 0,
-                        'files': []
-                    }
-                
-                extensions[ext]['count'] += 1
-                extensions[ext]['size'] += size
-                extensions[ext]['files'].append(str(path))
-                
-                file_count += 1
-                total_size += size
-        
-        # Show summary
-        if extensions:
-            size_mb = total_size / (1024 * 1024)
-            self.log_message(f"Found {file_count} files ({size_mb:.2f} MB)")
+            # Create a unique task ID
+            task_id = len(self.upload_tasks) + 1
             
-            for ext, data in sorted(extensions.items()):
-                ext_size_mb = data['size'] / (1024 * 1024)
-                self.log_message(f"  {ext}: {data['count']} files ({ext_size_mb:.2f} MB)")
-        
-        return extensions
+            # Create a task item for the list
+            task_item = QListWidgetItem()
+            task_item.setText(f"Task {task_id}: Order {task_data['order_number']} - Pending")
+            task_data_for_item = {
+                'id': task_id,
+                'order_number': task_data['order_number'],
+                'order_date': task_data['order_date'],
+                'folder_path': task_data['folder_path'],
+                'photographers': task_data['photographers'],
+                'status': 'pending',
+                'progress': 0,
+                'local_path': task_data['local_path']
+            }
+            task_item.setData(Qt.UserRole, task_data_for_item)
+            
+            # Add to the list widget
+            self.task_list.addItem(task_item)
+            
+            # Store the task data
+            self.upload_tasks.append({
+                'id': task_id,
+                'item': task_item,
+                'order_number': task_data['order_number'],
+                'order_date': task_data['order_date'],
+                'folder_path': task_data['folder_path'],
+                'photographers': task_data['photographers'],
+                'uploader': None,
+                'status': 'pending',
+                'progress': 0,
+                'local_path': task_data['local_path']
+            })
+            
+            # Enable the start all button if we have tasks
+            self.start_all_btn.setEnabled(len(self.upload_tasks) > 0)
+            
+            self.log_message(f"Added new photoshoot task {task_id} for order {task_data['order_number']}")
     
-    def validate_inputs(self):
-        """
-        Validate all inputs before starting upload
-        
-        Returns:
-            bool: True if all inputs are valid, False otherwise
-        """
-        if not self.folder_path.text():
-            QMessageBox.warning(self, "Error", "Please select a source folder!")
-            return False
-        
-        if not self.local_storage_path:
-            QMessageBox.warning(self, "Error", "Please select a local storage location!")
-            return False
-        
-        if not self.order_number.text():
-            QMessageBox.warning(self, "Error", "Please select an order!")
-            return False
-        
-        if not self.photographers['main']:
-            QMessageBox.warning(self, "Error", "Please select a main photographer!")
-            return False
-        
-        return True
-    
-    def add_upload_task(self):
-        """Add a new upload task to the list"""
-        if not self.validate_inputs():
+    def modify_selected_task(self):
+        """Open dialog for modifying the selected task"""
+        selected_items = self.task_list.selectedItems()
+        if not selected_items:
+            QMessageBox.information(self, "Information", "No task selected")
             return
         
-        # Create a unique task ID
-        task_id = len(self.upload_tasks) + 1
+        task_data = selected_items[0].data(Qt.UserRole)
+        task_id = task_data['id']
         
-        # Create a task item for the list
-        task_item = QListWidgetItem()
-        task_item.setText(f"Task {task_id}: Order {self.order_number.text()} - Pending")
-        task_item.setData(Qt.UserRole, {
-            'id': task_id,
-            'order_number': self.order_number.text(),
-            'order_date': self.order_date.date().toPyDate(),
-            'folder_path': self.folder_path.text(),
-            'photographers': self.photographers.copy(),
-            'status': 'pending',
-            'progress': 0,
-            'local_path': self.current_order_path
-        })
+        # Find the task
+        task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
+        if not task:
+            return
         
-        # Add to the list widget
-        self.task_list.addItem(task_item)
+        # Check if task is running or paused
+        if task['status'] in ['running', 'paused']:
+            reply = QMessageBox.question(
+                self, 
+                "Modify Running Task", 
+                "This task is currently active. Do you want to stop it before modifying?",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Cancel
+            )
+            
+            if reply == QMessageBox.Cancel:
+                return
+            elif reply == QMessageBox.Yes:
+                # Stop the task first
+                if task['uploader']:
+                    task['uploader'].stop()
+                task['status'] = 'pending'
+                task['progress'] = 0
+                task['item'].setText(f"Task {task_id}: Order {task['order_number']} - Pending")
         
-        # Store the task data
-        self.upload_tasks.append({
-            'id': task_id,
-            'item': task_item,
-            'order_number': self.order_number.text(),
-            'order_date': self.order_date.date().toPyDate(),
-            'folder_path': self.folder_path.text(),
-            'photographers': self.photographers.copy(),
-            'uploader': None,
-            'status': 'pending',
-            'progress': 0,
-            'local_path': self.current_order_path
-        })
+        # Open the task editor dialog
+        dialog = TaskEditorDialog(self.db_manager, self.local_storage_path, task_data=task, parent=self)
+        if dialog.exec_() == QDialog.Accepted:
+            # Get updated task data
+            updated_data = dialog.get_task_data()
+            
+            # Update the task
+            task['order_number'] = updated_data['order_number']
+            task['order_date'] = updated_data['order_date']
+            task['folder_path'] = updated_data['folder_path']
+            task['photographers'] = updated_data['photographers']
+            task['local_path'] = updated_data['local_path']
+            
+            # Update the list item
+            task['item'].setText(f"Task {task_id}: Order {updated_data['order_number']} - {task['status'].capitalize()}")
+            
+            # Update the data in the list item
+            task_data_for_item = {
+                'id': task_id,
+                'order_number': updated_data['order_number'],
+                'order_date': updated_data['order_date'],
+                'folder_path': updated_data['folder_path'],
+                'photographers': updated_data['photographers'],
+                'status': task['status'],
+                'progress': task['progress'],
+                'local_path': updated_data['local_path']
+            }
+            task['item'].setData(Qt.UserRole, task_data_for_item)
+            
+            self.log_message(f"Modified task {task_id} for order {updated_data['order_number']}")
+    
+    def on_task_selected(self):
+        """Handle task selection to enable/disable appropriate buttons"""
+        selected_items = self.task_list.selectedItems()
+        if not selected_items:
+            # إذا لم يتم تحديد أي مهمة، قم بتعطيل جميع الأزرار المتعلقة بالمهام
+            self.cancel_btn.setEnabled(False)
+            self.pause_btn.setEnabled(False)
+            self.resume_btn.setEnabled(False)
+            self.restart_btn.setEnabled(False)
+            self.modify_task_btn.setEnabled(False)
+            return
         
-        # Enable the start all button if we have tasks
-        self.start_all_btn.setEnabled(len(self.upload_tasks) > 0)
+        # الحصول على المهمة المحددة
+        task_data = selected_items[0].data(Qt.UserRole)
+        task_id = task_data['id']
+        task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
         
-        # Clear the form for the next task
-        self.folder_path.clear()
-        self.order_number.clear()
-        self.photographer_info.clear()
-        self.photographers = {
-            'main': None,
-            'assistant': None, 
-            'video': None
-        }
+        if not task:
+            return
         
-        self.log_message(f"Added upload task {task_id} for order {self.order_number.text()}")
+        # تمكين زر التعديل لجميع حالات المهام
+        self.modify_task_btn.setEnabled(True)
+        
+        # تمكين/تعطيل الأزرار بناءً على حالة المهمة
+        if task['status'] == 'running':
+            self.cancel_btn.setEnabled(True)
+            self.pause_btn.setEnabled(True)
+            self.resume_btn.setEnabled(False)
+            self.restart_btn.setEnabled(False)
+        elif task['status'] == 'paused':
+            self.cancel_btn.setEnabled(True)
+            self.pause_btn.setEnabled(False)
+            self.resume_btn.setEnabled(True)
+            self.restart_btn.setEnabled(False)
+        elif task['status'] in ['completed', 'cancelled']:
+            self.cancel_btn.setEnabled(False)
+            self.pause_btn.setEnabled(False)
+            self.resume_btn.setEnabled(False)
+            self.restart_btn.setEnabled(True)
+        elif task['status'] == 'pending':
+            self.cancel_btn.setEnabled(True)
+            self.pause_btn.setEnabled(False)
+            self.resume_btn.setEnabled(False)
+            self.restart_btn.setEnabled(False)
     
     def start_all_tasks(self):
         """Start all pending upload tasks"""
@@ -635,6 +466,85 @@ class S3UploaderGUI(QMainWindow):
         uploader.start()
         
         self.log_message(f"Started upload task {task['id']} for order {task['order_number']}")
+    
+    def update_task_progress(self, task_id, current, total):
+        """
+        Update progress for a specific task
+        
+        Args:
+            task_id (int): Task ID
+            current (int): Current progress
+            total (int): Total items
+        """
+        # Find the task
+        task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
+        if not task:
+            return
+        
+        # Calculate percentage
+        percentage = int((current / total) * 100)
+        task['progress'] = percentage
+        
+        # Update the list item
+        task['item'].setText(f"Task {task['id']}: Order {task['order_number']} - Running ({percentage}%)")
+        
+        # Update the main progress bar with average progress of all running tasks
+        running_tasks = [t for t in self.upload_tasks if t['status'] == 'running']
+        if running_tasks:
+            avg_progress = sum(t['progress'] for t in running_tasks) / len(running_tasks)
+            self.progress_bar.setValue(int(avg_progress))
+    
+    def log_task_message(self, task_id, message):
+        """
+        Log a message for a specific task
+        
+        Args:
+            task_id (int): Task ID
+            message (str): Message to log
+        """
+        self.log_message(f"Task {task_id}: {message}")
+    
+    def task_finished(self, task_id):
+        """
+        Handle completion of a specific task
+        
+        Args:
+            task_id (int): Finished task ID
+        """
+        # Find the task
+        task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
+        if not task:
+            return
+        
+        # Update task status
+        task['status'] = 'completed'
+        task['progress'] = 100
+        
+        # Update the list item
+        task['item'].setText(f"Task {task['id']}: Order {task['order_number']} - Completed")
+        
+        # Enable restart button for completed tasks
+        self.restart_btn.setEnabled(True)
+        
+        # Check if all tasks are completed
+        if all(t['status'] in ['completed', 'cancelled'] for t in self.upload_tasks):
+            self.all_tasks_finished()
+        
+        # Refresh the upload history
+        self.load_upload_history()
+    
+    def all_tasks_finished(self):
+        """Handle completion of all tasks"""
+        self.progress_bar.setValue(100)
+        self.cancel_btn.setEnabled(False)
+        self.log_message("All upload tasks completed")
+        
+        self.tray_icon.showMessage(
+            "All Uploads Complete",
+            "All file upload tasks completed successfully",
+            QSystemTrayIcon.Information,
+            2000
+        )
     
     def pause_selected_task(self):
         """Pause the selected upload task"""
@@ -752,125 +662,6 @@ class S3UploaderGUI(QMainWindow):
             self.pause_btn.setEnabled(True)
             self.resume_btn.setEnabled(False)
             self.restart_btn.setEnabled(False)
-    def on_task_selected(self):
-        """Handle task selection to enable/disable appropriate buttons"""
-        selected_items = self.task_list.selectedItems()
-        if not selected_items:
-            # إذا لم يتم تحديد أي مهمة، قم بتعطيل جميع الأزرار المتعلقة بالمهام
-            self.cancel_btn.setEnabled(False)
-            self.pause_btn.setEnabled(False)
-            self.resume_btn.setEnabled(False)
-            self.restart_btn.setEnabled(False)
-            return
-        
-        # الحصول على المهمة المحددة
-        task_data = selected_items[0].data(Qt.UserRole)
-        task_id = task_data['id']
-        task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
-        
-        if not task:
-            return
-        
-        # تمكين/تعطيل الأزرار بناءً على حالة المهمة
-        if task['status'] == 'running':
-            self.cancel_btn.setEnabled(True)
-            self.pause_btn.setEnabled(True)
-            self.resume_btn.setEnabled(False)
-            self.restart_btn.setEnabled(False)
-        elif task['status'] == 'paused':
-            self.cancel_btn.setEnabled(True)
-            self.pause_btn.setEnabled(False)
-            self.resume_btn.setEnabled(True)
-            self.restart_btn.setEnabled(False)
-        elif task['status'] in ['completed', 'cancelled']:
-            self.cancel_btn.setEnabled(False)
-            self.pause_btn.setEnabled(False)
-            self.resume_btn.setEnabled(False)
-            self.restart_btn.setEnabled(True)
-        elif task['status'] == 'pending':
-            self.cancel_btn.setEnabled(True)
-            self.pause_btn.setEnabled(False)
-            self.resume_btn.setEnabled(False)
-            self.restart_btn.setEnabled(False)
-    
-    def update_task_progress(self, task_id, current, total):
-        """
-        Update progress for a specific task
-        
-        Args:
-            task_id (int): Task ID
-            current (int): Current progress
-            total (int): Total items
-        """
-        # Find the task
-        task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
-        if not task:
-            return
-        
-        # Calculate percentage
-        percentage = int((current / total) * 100)
-        task['progress'] = percentage
-        
-        # Update the list item
-        task['item'].setText(f"Task {task['id']}: Order {task['order_number']} - Running ({percentage}%)")
-        
-        # Update the main progress bar with average progress of all running tasks
-        running_tasks = [t for t in self.upload_tasks if t['status'] == 'running']
-        if running_tasks:
-            avg_progress = sum(t['progress'] for t in running_tasks) / len(running_tasks)
-            self.progress_bar.setValue(int(avg_progress))
-    
-    def log_task_message(self, task_id, message):
-        """
-        Log a message for a specific task
-        
-        Args:
-            task_id (int): Task ID
-            message (str): Message to log
-        """
-        self.log_message(f"Task {task_id}: {message}")
-    
-    def task_finished(self, task_id):
-        """
-        Handle completion of a specific task
-        
-        Args:
-            task_id (int): Finished task ID
-        """
-        # Find the task
-        task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
-        if not task:
-            return
-        
-        # Update task status
-        task['status'] = 'completed'
-        task['progress'] = 100
-        
-        # Update the list item
-        task['item'].setText(f"Task {task['id']}: Order {task['order_number']} - Completed")
-        
-        # Enable restart button for completed tasks
-        self.restart_btn.setEnabled(True)
-        
-        # Check if all tasks are completed
-        if all(t['status'] in ['completed', 'cancelled'] for t in self.upload_tasks):
-            self.all_tasks_finished()
-        
-        # Refresh the upload history
-        self.load_upload_history()
-    
-    def all_tasks_finished(self):
-        """Handle completion of all tasks"""
-        self.progress_bar.setValue(100)
-        self.cancel_btn.setEnabled(False)
-        self.log_message("All upload tasks completed")
-        
-        self.tray_icon.showMessage(
-            "All Uploads Complete",
-            "All file upload tasks completed successfully",
-            QSystemTrayIcon.Information,
-            2000
-        )
     
     def cancel_selected_task(self):
         """Cancel the selected upload task"""
@@ -904,13 +695,270 @@ class S3UploaderGUI(QMainWindow):
         if all(t['status'] in ['completed', 'cancelled'] for t in self.upload_tasks):
             self.cancel_btn.setEnabled(False)
     
-    def start_upload(self):
-        """Legacy method for backward compatibility"""
-        self.add_upload_task()
-        # Start the task immediately
-        if self.upload_tasks:
-            self.start_task(self.upload_tasks[-1])
-    
+    def save_task_to_database(self, task):
+        """
+        Save task to database for persistence
+        
+        Args:
+            task (dict): Task information
+        
+        Returns:
+            int: Database task ID or None if failed
+        """
+        try:
+            if not self.db_manager.connection or not self.db_manager.connection.is_connected():
+                self.db_manager.connect()
+            
+            cursor = self.db_manager.connection.cursor()
+            
+            # Check if this task already exists in database
+            if 'db_id' in task and task['db_id']:
+                # Update existing task
+                update_query = """
+                UPDATE upload_tasks
+                SET status = %s,
+                    progress = %s,
+                    last_updated = NOW(),
+                    total_files = %s,
+                    uploaded_files = %s,
+                    skipped_files = %s
+                WHERE task_id = %s
+                """
+                
+                if task['status'] == 'completed' and not task.get('completed_timestamp'):
+                    # Set completed timestamp
+                    update_query = """
+                    UPDATE upload_tasks
+                    SET status = %s,
+                        progress = %s,
+                        last_updated = NOW(),
+                        completed_timestamp = NOW(),
+                        total_files = %s,
+                        uploaded_files = %s,
+                        skipped_files = %s
+                    WHERE task_id = %s
+                    """
+                
+                # Get file counts from uploader if available
+                total_files = 0
+                uploaded_files = 0
+                skipped_files = 0
+                
+                if 'uploader' in task and task['uploader']:
+                    uploader = task['uploader']
+                    uploaded_files = getattr(uploader, 'uploaded_file_count', 0)
+                    skipped_files = getattr(uploader, 'skipped_file_count', 0)
+                    total_files = uploaded_files + skipped_files
+                
+                cursor.execute(update_query, (
+                    task['status'],
+                    task['progress'],
+                    total_files,
+                    uploaded_files,
+                    skipped_files,
+                    task['db_id']
+                ))
+                
+                self.db_manager.connection.commit()
+                return task['db_id']
+            else:
+                # Insert new task
+                insert_query = """
+                INSERT INTO upload_tasks (
+                    order_number,
+                    order_date,
+                    folder_path,
+                    main_photographer_id,
+                    assistant_photographer_id,
+                    video_photographer_id,
+                    status,
+                    progress
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """
+                
+                # Convert date if needed
+                order_date = task['order_date']
+                if not isinstance(order_date, str):
+                    order_date = order_date.strftime('%Y-%m-%d')
+                
+                # Get photographer IDs
+                main_photographer_id = task['photographers']['main'] if task['photographers']['main'] else None
+                assistant_photographer_id = task['photographers']['assistant'] if task['photographers']['assistant'] else None
+                video_photographer_id = task['photographers']['video'] if task['photographers']['video'] else None
+                
+                cursor.execute(insert_query, (
+                    task['order_number'],
+                    order_date,
+                    task['folder_path'],
+                    main_photographer_id,
+                    assistant_photographer_id,
+                    video_photographer_id,
+                    task['status'],
+                    task['progress']
+                ))
+                
+                self.db_manager.connection.commit()
+                db_id = cursor.lastrowid
+                
+                return db_id
+        
+        except Exception as e:
+            self.log_message(f"Error saving task to database: {str(e)}")
+            import traceback
+            self.log_message(traceback.format_exc())
+            return None
+
+    def load_tasks_from_database(self):
+        """
+        Load tasks from database when app starts
+        
+        Returns:
+            list: List of tasks loaded from database
+        """
+        try:
+            if not self.db_manager.connection or not self.db_manager.connection.is_connected():
+                self.db_manager.connect()
+            
+            cursor = self.db_manager.connection.cursor(dictionary=True)
+            
+            # Check if upload_tasks table exists
+            check_query = """
+            SELECT COUNT(*) as table_exists 
+            FROM information_schema.TABLES 
+            WHERE TABLE_SCHEMA = %s 
+            AND TABLE_NAME = 'upload_tasks'
+            """
+            cursor.execute(check_query, (self.db_manager.rds_config['database'],))
+            result = cursor.fetchone()
+            
+            if not result or result['table_exists'] == 0:
+                # Create the table if it doesn't exist
+                create_table_query = """
+                CREATE TABLE `upload_tasks` (
+                `task_id` int NOT NULL AUTO_INCREMENT,
+                `order_number` varchar(50) NOT NULL,
+                `order_date` date NOT NULL,
+                `folder_path` varchar(1024) NOT NULL,
+                `main_photographer_id` int DEFAULT NULL,
+                `assistant_photographer_id` int DEFAULT NULL,
+                `video_photographer_id` int DEFAULT NULL,
+                `status` varchar(20) NOT NULL,
+                `progress` int DEFAULT 0,
+                `created_timestamp` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+                `last_updated` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                `completed_timestamp` timestamp NULL DEFAULT NULL,
+                `total_files` int DEFAULT 0,
+                `uploaded_files` int DEFAULT 0,
+                `skipped_files` int DEFAULT 0,
+                PRIMARY KEY (`task_id`),
+                KEY `idx_task_order` (`order_number`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                """
+                cursor.execute(create_table_query)
+                self.db_manager.connection.commit()
+                self.log_message("Created upload_tasks table for task persistence")
+                return []
+            
+            # Load recent tasks (from last 7 days and non-completed tasks)
+            query = """
+            SELECT 
+                t.*,
+                e1.Emp_FullName as main_photographer_name,
+                e2.Emp_FullName as assistant_photographer_name,
+                e3.Emp_FullName as video_photographer_name
+            FROM 
+                upload_tasks t
+            LEFT JOIN employees e1 ON t.main_photographer_id = e1.Emp_ID
+            LEFT JOIN employees e2 ON t.assistant_photographer_id = e2.Emp_ID
+            LEFT JOIN employees e3 ON t.video_photographer_id = e3.Emp_ID
+            WHERE 
+                t.created_timestamp > DATE_SUB(NOW(), INTERVAL 7 DAY)
+                OR t.status IN ('pending', 'running', 'paused')
+            ORDER BY 
+                t.last_updated DESC
+            """
+            cursor.execute(query)
+            db_tasks = cursor.fetchall()
+            
+            # Convert to our task format
+            tasks = []
+            for db_task in db_tasks:
+                # Create task item for display
+                task_item = QListWidgetItem()
+                task_status = db_task['status'].capitalize()
+                progress = db_task['progress']
+                
+                if db_task['status'] in ['running', 'paused']:
+                    task_item.setText(f"Task {db_task['task_id']}: Order {db_task['order_number']} - {task_status} ({progress}%)")
+                else:
+                    task_item.setText(f"Task {db_task['task_id']}: Order {db_task['order_number']} - {task_status}")
+                
+                # Create photographers dict
+                photographers = {
+                    'main': db_task['main_photographer_id'],
+                    'assistant': db_task['assistant_photographer_id'],
+                    'video': db_task['video_photographer_id']
+                }
+                
+                # Create task data for item
+                item_data = {
+                    'id': db_task['task_id'],  # Use database ID for task
+                    'order_number': db_task['order_number'],
+                    'order_date': db_task['order_date'],
+                    'folder_path': db_task['folder_path'],
+                    'photographers': photographers,
+                    'status': db_task['status'],
+                    'progress': db_task['progress'],
+                    'local_path': db_task['folder_path'],  # Use folder path as local path
+                    'db_id': db_task['task_id']  # Store database ID
+                }
+                
+                # Set data for item
+                task_item.setData(Qt.UserRole, item_data)
+                
+                # Add to list widget
+                self.task_list.addItem(task_item)
+                
+                # Add task to our list
+                task = {
+                    'id': db_task['task_id'],
+                    'item': task_item,
+                    'order_number': db_task['order_number'],
+                    'order_date': db_task['order_date'],
+                    'folder_path': db_task['folder_path'],
+                    'photographers': photographers,
+                    'uploader': None,  # No active uploader yet
+                    'status': db_task['status'],
+                    'progress': db_task['progress'],
+                    'local_path': db_task['folder_path'],
+                    'db_id': db_task['task_id']
+                }
+                
+                tasks.append(task)
+                
+                # Log loaded task
+                photographer_info = []
+                if db_task.get('main_photographer_name'):
+                    photographer_info.append(f"Main: {db_task['main_photographer_name']}")
+                if db_task.get('assistant_photographer_name'):
+                    photographer_info.append(f"Asst: {db_task['assistant_photographer_name']}")
+                if db_task.get('video_photographer_name'):
+                    photographer_info.append(f"Video: {db_task['video_photographer_name']}")
+                
+                photographer_text = ", ".join(photographer_info) if photographer_info else "No photographers"
+                
+                self.log_message(f"Loaded task {db_task['task_id']} for order {db_task['order_number']} - Status: {db_task['status']}, {photographer_text}")
+            
+            return tasks
+        
+        except Exception as e:
+            self.log_message(f"Error loading tasks from database: {str(e)}")
+            import traceback
+            self.log_message(traceback.format_exc())
+            return []
+
+
     def organize_files(self, source_folder, target_order_path=None):
         """
         Organize files into their respective folders by file type and move them
@@ -994,7 +1042,6 @@ class S3UploaderGUI(QMainWindow):
     
     def upload_finished(self):
         """Handle upload completion"""
-        self.upload_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.log_message("Upload process finished")
         
@@ -1007,10 +1054,6 @@ class S3UploaderGUI(QMainWindow):
             QSystemTrayIcon.Information,
             2000
         )
-    
-    def cancel_upload(self):
-        """Legacy method for backward compatibility"""
-        self.cancel_selected_task()
     
     def load_upload_history(self):
         """Load today's upload history"""
@@ -1184,8 +1227,25 @@ class S3UploaderGUI(QMainWindow):
 
     def quit_app(self):
         """Properly exit the application"""
-        if self.uploader:
-            self.uploader.stop()
+        # Check for running tasks
+        running_tasks = [t for t in self.upload_tasks if t['status'] in ['running', 'paused']]
+        if running_tasks:
+            reply = QMessageBox.question(
+                self, 'Exit',
+                f'There are {len(running_tasks)} active upload tasks. Are you sure you want to quit?',
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            
+            if reply == QMessageBox.No:
+                return
+                
+            # Stop all running tasks
+            for task in running_tasks:
+                if task['uploader']:
+                    task['uploader'].stop()
+        
+        # Close database connection
         self.db_manager.close()
         QApplication.quit()
     
@@ -1196,18 +1256,23 @@ class S3UploaderGUI(QMainWindow):
         Args:
             event (QCloseEvent): Close event
         """
-        if self.uploader and self.uploader.isRunning():
+        # Check for running tasks
+        running_tasks = [t for t in self.upload_tasks if t['status'] in ['running', 'paused']]
+        if running_tasks:
             reply = QMessageBox.question(
                 self, 'Exit',
-                'Upload is in progress. Are you sure you want to quit?',
+                f'There are {len(running_tasks)} active upload tasks. Are you sure you want to quit?',
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No
             )
             
-            if reply == QMessageBox.Yes:
-                self.quit_app()
-            else:
+            if reply == QMessageBox.No:
                 event.ignore()
                 return
                 
+            # Stop all running tasks
+            for task in running_tasks:
+                if task['uploader']:
+                    task['uploader'].stop()
+        
         event.accept()
