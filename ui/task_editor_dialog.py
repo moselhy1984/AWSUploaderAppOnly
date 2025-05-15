@@ -8,7 +8,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
                             QPushButton, QDateEdit, QFileDialog, QMessageBox, 
                             QGroupBox, QFormLayout)
-from PyQt5.QtCore import Qt, QDate  # تأكد من استيراد QDate هنا
+from PyQt5.QtCore import Qt, QDate  # Make sure to import QDate here
 
 from ui.photographers_dialog import PhotographersDialog
 from ui.order_selector_dialog import OrderSelectorDialog
@@ -47,6 +47,10 @@ class TaskEditorDialog(QDialog):
         
         self.current_order_path = None
         if self.is_edit_mode:
+            # Ensure local_path exists in task_data, use folder_path if missing
+            if 'local_path' not in self.task_data or not self.task_data['local_path']:
+                self.task_data['local_path'] = self.task_data['folder_path']
+                
             self.current_order_path = self.task_data['local_path']
         
         # Setup UI
@@ -495,6 +499,10 @@ class TaskEditorDialog(QDialog):
         Returns:
             dict: Task data
         """
+        # Ensure current_order_path is set, use folder_path if it's None
+        if self.current_order_path is None:
+            self.current_order_path = self.folder_path.text()
+            
         task_data = {
             'order_number': self.order_number.text(),
             'order_date': self.order_date.date().toPyDate(),

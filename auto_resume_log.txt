@@ -1,0 +1,18 @@
+2025-05-15 04:54:13.599 Python[61730:24681842] +[IMKClient subclass]: chose IMKClient_Modern
+2025-05-15 04:54:13.599 Python[61730:24681842] +[IMKInputSession subclass]: chose IMKInputSession_Modern
+Starting AWS Uploader application...
+Initializing database manager...
+Database connection failed - continuing without database
+Application configuration:
+- Auto-resume: False
+- Skip state load: True
+- Safe mode: False
+- Load all tasks: True
+Loading secure configuration...
+Error in main application: 'SecureConfigManager' object has no attribute 'load_config'
+Traceback (most recent call last):
+  File "/Users/mostafamoselhy/Documents/Documents - Mac’s Mac mini/AWSApps/AWSUploaderAppOnly/main.py", line 50, in main
+    aws_config = config_manager.load_config()
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'SecureConfigManager' object has no attribute 'load_config'
+

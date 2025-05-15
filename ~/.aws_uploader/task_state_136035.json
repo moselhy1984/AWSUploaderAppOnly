@@ -1,0 +1,16 @@
+{
+  "order_number": "136035",
+  "folder_path": "/Users/mostafamoselhy/Downloads/Booking_Folders/2025/05-2025/14-05-2025/Order_136035",
+  "local_path": "/Users/mostafamoselhy/Downloads/Booking_Folders/2025/05-2025/14-05-2025/Order_136035",
+  "status": "paused",
+  "progress": 5.0,
+  "total_files": 305,
+  "current_file_index": 15,
+  "last_saved": "2025-05-15 04:12:40",
+  "photographers": {
+    "main": 25,
+    "assistant": null,
+    "video": null
+  },
+  "order_date": "2025-05-14"
+} 

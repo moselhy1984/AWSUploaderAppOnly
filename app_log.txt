@@ -1,0 +1,2 @@
+2025-05-14 16:42:02.378 Python[32942:23715530] +[IMKClient subclass]: chose IMKClient_Modern
+2025-05-14 16:42:02.378 Python[32942:23715530] +[IMKInputSession subclass]: chose IMKInputSession_Modern

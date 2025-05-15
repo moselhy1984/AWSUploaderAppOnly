@@ -40,6 +40,93 @@ class DatabaseManager:
         if self.connection:
             self.connection.close()
     
+    def authenticate(self, username, password):
+        """
+        Authenticate a user without MAC address verification
+        
+        Args:
+            username (str): Username
+            password (str): Password
+            
+        Returns:
+            dict or False: User info dictionary if successful, False otherwise
+        """
+        try:
+            if not self.connection or not self.connection.is_connected():
+                self.connect()
+                
+            cursor = self.connection.cursor(dictionary=True)
+            
+            # First check if employees table exists
+            cursor.execute("""
+            SELECT COUNT(*) as table_exists
+            FROM information_schema.tables
+            WHERE table_schema = %s
+            AND table_name = 'employees'
+            """, (self.rds_config['database'],))
+            
+            result = cursor.fetchone()
+            if result['table_exists'] == 0:
+                print("Error: Employees table does not exist!")
+                cursor.close()
+                return False
+                
+            # Then check if necessary columns exist
+            cursor.execute("""
+            SELECT COUNT(*) as columns_exist
+            FROM information_schema.COLUMNS 
+            WHERE TABLE_SCHEMA = %s 
+            AND TABLE_NAME = 'employees' 
+            AND COLUMN_NAME IN ('Emp_UserName', 'Emp_Password')
+            """, (self.rds_config['database'],))
+            
+            result = cursor.fetchone()
+            if result['columns_exist'] < 2:
+                print("Error: Username/password columns don't fully exist in employees table!")
+                cursor.close()
+                return False
+                
+            # Now try authentication
+            query = """
+            SELECT Emp_ID, Emp_FullName, Emp_MacAddress, Emp_Admin, Emp_UserName
+            FROM employees 
+            WHERE Emp_UserName = %s AND Emp_Password = %s
+            """
+            
+            print(f"Executing authentication query with username: {username}")
+            cursor.execute(query, (username, password))
+            user = cursor.fetchone()
+            
+            if user:
+                # Add login flag
+                user['is_logged_in'] = True
+                # For fallback authentication in UI
+                user['username'] = user['Emp_UserName']
+                print(f"User authenticated: {user['Emp_FullName']}")
+                cursor.close()
+                return user
+            else:
+                # For debugging - check if user exists at all
+                check_query = """
+                SELECT COUNT(*) as user_exists
+                FROM employees 
+                WHERE Emp_UserName = %s
+                """
+                cursor.execute(check_query, (username,))
+                result = cursor.fetchone()
+                
+                if result['user_exists'] > 0:
+                    print(f"User {username} exists but password was incorrect")
+                else:
+                    print(f"User {username} does not exist in database")
+                
+                cursor.close()
+                return False
+                
+        except mysql.connector.Error as e:
+            print(f"Database error in authenticate: {str(e)}")
+            return False
+    
     def verify_user(self, username, password, mac_address):
         """
         Verify user credentials and MAC address
@@ -221,6 +308,103 @@ class DatabaseManager:
             return orders
         except mysql.connector.Error as e:
             print(f"Error fetching uploaded orders: {e}")
+            return []
+    
+    def get_filtered_uploads(self, from_date=None, to_date=None, order_number=None):
+        """
+        Get uploads filtered by date range and/or order number
+        
+        Args:
+            from_date (str, optional): Start date for filtering (format: YYYY-MM-DD)
+            to_date (str, optional): End date for filtering (format: YYYY-MM-DD)
+            order_number (str, optional): Order number to filter by
+            
+        Returns:
+            list: List of filtered uploads
+        """
+        try:
+            if not self.connection or not self.connection.is_connected():
+                self.connect()
+                
+            cursor = self.connection.cursor(dictionary=True)
+            
+            # Check if the uploads table has the photographer columns
+            check_query = """
+            SELECT COUNT(*) as column_exists 
+            FROM information_schema.COLUMNS 
+            WHERE TABLE_SCHEMA = %s 
+            AND TABLE_NAME = 'uploads' 
+            AND COLUMN_NAME = 'main_photographer_id'
+            """
+            cursor.execute(check_query, (self.rds_config['database'],))
+            result = cursor.fetchone()
+            
+            # Build the query based on existing schema
+            if result['column_exists'] == 0:
+                query = """
+                SELECT 
+                    o.Order_Num_ID as order_id, 
+                    o.Order_Num as order_number,
+                    o.Customer_ID as customer_id, 
+                    o.Order_Date as order_date,
+                    o.OrderType as order_type,
+                    u.upload_timestamp as upload_time,
+                    u.file_count as file_count
+                FROM f_order o
+                JOIN uploads u ON o.Order_Num = u.order_number
+                WHERE 1=1
+                """
+            else:
+                query = """
+                SELECT 
+                    o.Order_Num_ID as order_id, 
+                    o.Order_Num as order_number,
+                    o.Customer_ID as customer_id, 
+                    o.Order_Date as order_date,
+                    o.OrderType as order_type,
+                    u.upload_timestamp as upload_time,
+                    u.file_count as file_count,
+                    u.main_photographer_id as main_photographer_id,
+                    u.assistant_photographer_id as assistant_photographer_id,
+                    u.video_photographer_id as video_photographer_id,
+                    e1.Emp_FullName as main_photographer_name,
+                    e2.Emp_FullName as assistant_photographer_name,
+                    e3.Emp_FullName as video_photographer_name
+                FROM f_order o
+                JOIN uploads u ON o.Order_Num = u.order_number
+                LEFT JOIN employees e1 ON u.main_photographer_id = e1.Emp_ID
+                LEFT JOIN employees e2 ON u.assistant_photographer_id = e2.Emp_ID
+                LEFT JOIN employees e3 ON u.video_photographer_id = e3.Emp_ID
+                WHERE 1=1
+                """
+                
+            # Add filter conditions and parameters
+            params = []
+            
+            if from_date:
+                query += " AND DATE(u.upload_timestamp) >= %s"
+                params.append(from_date)
+                
+            if to_date:
+                query += " AND DATE(u.upload_timestamp) <= %s"
+                params.append(to_date)
+                
+            if order_number:
+                query += " AND o.Order_Num LIKE %s"
+                params.append(f"%{order_number}%")
+                
+            # Add order by
+            query += " ORDER BY u.upload_timestamp DESC"
+            
+            # Execute the query with the parameters
+            cursor.execute(query, params)
+            uploads = cursor.fetchall()
+            cursor.close()
+            
+            return uploads
+            
+        except mysql.connector.Error as e:
+            print(f"Error fetching filtered uploads: {e}")
             return []
     
     def get_order_details(self, order_number):
@@ -408,4 +592,66 @@ class DatabaseManager:
             print(f"Unexpected error: {ex}")
             import traceback
             traceback.print_exc()
+            return False
+    
+    def auto_authenticate(self):
+        """
+        Automatically authenticate with admin credentials
+        This is a special function for AUTO_RESUME mode
+        
+        Returns:
+            dict or False: User info dictionary if successful, False otherwise
+        """
+        try:
+            if not self.connection or not self.connection.is_connected():
+                self.connect()
+                
+            cursor = self.connection.cursor(dictionary=True)
+            
+            # Try to find an admin user account
+            query = """
+            SELECT Emp_ID, Emp_FullName, Emp_MacAddress, Emp_Admin, Emp_UserName
+            FROM employees 
+            WHERE Emp_Admin = 1 AND Emp_Active_In = 1
+            LIMIT 1
+            """
+            
+            cursor.execute(query)
+            admin = cursor.fetchone()
+            
+            if admin:
+                # Add login flag
+                admin['is_logged_in'] = True
+                # For fallback authentication in UI
+                admin['username'] = admin['Emp_UserName']
+                print(f"Auto-authenticated as admin: {admin['Emp_FullName']}")
+                cursor.close()
+                return admin
+            else:
+                # Try to find any active user
+                query = """
+                SELECT Emp_ID, Emp_FullName, Emp_MacAddress, Emp_Admin, Emp_UserName
+                FROM employees 
+                WHERE Emp_Active_In = 1
+                LIMIT 1
+                """
+                
+                cursor.execute(query)
+                user = cursor.fetchone()
+                
+                if user:
+                    # Add login flag
+                    user['is_logged_in'] = True
+                    # For fallback authentication in UI
+                    user['username'] = user['Emp_UserName']
+                    print(f"Auto-authenticated as user: {user['Emp_FullName']}")
+                    cursor.close()
+                    return user
+                else:
+                    print("No suitable user found for auto-authentication")
+                    cursor.close()
+                    return False
+                
+        except mysql.connector.Error as e:
+            print(f"Database error in auto_authenticate: {str(e)}")
             return False
