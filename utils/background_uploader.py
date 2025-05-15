@@ -362,11 +362,30 @@ class BackgroundUploader(QThread):
             
             # Ensure order_date is a datetime object
             if hasattr(self.order_date, 'toPyDate'):
-                # Convert QDate to Python date
-                py_date = self.order_date.toPyDate()
-                year = py_date.year
-                month = f"{py_date.month:02d}-{year}"
-                day = f"{py_date.day:02d}-{month}"
+                try:
+                    # Convert QDate to Python date
+                    py_date = self.order_date.toPyDate()
+                    
+                    # Validate the date is not year 0 or invalid
+                    if py_date and py_date.year > 0:
+                        year = py_date.year
+                        month = f"{py_date.month:02d}-{year}"
+                        day = f"{py_date.day:02d}-{month}"
+                    else:
+                        # Use current date as fallback
+                        current_date = datetime.now()
+                        year = current_date.year
+                        month = f"{current_date.month:02d}-{year}"
+                        day = f"{current_date.day:02d}-{month}"
+                        self.log.emit(f"Warning: QDate has invalid year ({py_date}), using current date")
+                except (ValueError, AttributeError) as e:
+                    # Handle any errors with QDate conversion
+                    self.log.emit(f"Error converting QDate: {str(e)}")
+                    current_date = datetime.now()
+                    year = current_date.year
+                    month = f"{current_date.month:02d}-{year}"
+                    day = f"{current_date.day:02d}-{month}"
+                    self.log.emit(f"Using current date as fallback")
             elif isinstance(self.order_date, datetime):
                 # It's already a datetime
                 year = self.order_date.year

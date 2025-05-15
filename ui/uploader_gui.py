@@ -28,7 +28,7 @@ class S3UploaderGUI(QMainWindow):
     """
     Main application window for S3 file uploader
     """
-    def __init__(self, aws_config, db_manager, user_info, skip_state_load=False, auto_resume=False, safe_mode=False, load_all_tasks=False):
+    def __init__(self, aws_config, db_manager, user_info, skip_state_load=False, auto_resume=False, safe_mode=False, load_all_tasks=False, no_auto_login=False):
         """
         Initialize the S3 Uploader GUI
         
@@ -40,6 +40,7 @@ class S3UploaderGUI(QMainWindow):
             auto_resume (bool): Auto-resume tasks from saved states
             safe_mode (bool): Run in safe mode with restricted functionality
             load_all_tasks (bool): Load all tasks from database, not just today's
+            no_auto_login (bool): Disable automatic login functionality
         """
         super().__init__()
         self.aws_config = aws_config
@@ -49,6 +50,7 @@ class S3UploaderGUI(QMainWindow):
         self.auto_resume = auto_resume
         self.safe_mode = safe_mode
         self.load_all_tasks = load_all_tasks
+        self.no_auto_login = no_auto_login
         
         # Set default application state
         self.upload_tasks = []
@@ -108,6 +110,8 @@ class S3UploaderGUI(QMainWindow):
             self.log_message("Running in safe mode with limited functionality")
         if skip_state_load:
             self.log_message("Skipping loading previous tasks and saved states")
+        if no_auto_login:
+            self.log_message("Automatic login is disabled")
     
     def check_previous_shutdown(self):
         """
@@ -558,22 +562,31 @@ class S3UploaderGUI(QMainWindow):
     
     def ensure_user_logged_in(self):
         """
-        Ensure the user is logged in before performing restricted actions
+        Ensure the user is logged in, either by checking current authentication state 
+        or by prompting for login.
         
         Returns:
-            bool: True if user is logged in (or just successfully logged in), False otherwise
+            bool: True if user is or becomes authenticated, False otherwise
         """
+        # If already logged in, just return True
         if self.user_info.get('is_logged_in', False):
             return True
             
-        # Ask user to log in
-        reply = QMessageBox.question(
-            self,
-            "Login Required",
-            "This action requires login. Would you like to login now?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes
-        )
+        # Show authentication dialog
+        from PyQt5.QtWidgets import QMessageBox, QDialog
+        
+        # If auto-login is disabled, only show manual login dialog
+        if self.no_auto_login:
+            reply = QMessageBox.Yes
+        else:
+            # Ask if user wants to login
+            reply = QMessageBox.question(
+                self, 
+                "Authentication Required", 
+                "You need to be logged in to perform this action. Would you like to log in now?",
+                QMessageBox.Yes | QMessageBox.No, 
+                QMessageBox.Yes
+            )
         
         if reply == QMessageBox.Yes:
             # Show login dialog
@@ -611,14 +624,18 @@ class S3UploaderGUI(QMainWindow):
         """Disable features that require authentication"""
         # Disable buttons that require authentication
         self.upload_photoshoot_btn.setEnabled(False)
-        self.modify_task_btn.setEnabled(False)
-        self.start_all_btn.setEnabled(False)
-        self.pause_btn.setEnabled(False)
-        self.resume_btn.setEnabled(False)
-        self.restart_btn.setEnabled(False)
+        
+        # Start Task and Resume Task buttons don't need authentication anymore
+        # self.start_all_btn.setEnabled(False)
+        # self.pause_btn.setEnabled(False)
+        # self.resume_btn.setEnabled(False)
+        # self.restart_btn.setEnabled(False)
+        
+        # These still need authentication
         self.cancel_btn.setEnabled(False)
         self.delete_btn.setEnabled(False)
-        
+        self.modify_task_btn.setEnabled(False)
+    
     def enable_authenticated_features(self):
         """Enable features that require authentication"""
         # Enable buttons that may be used after authentication
@@ -627,7 +644,7 @@ class S3UploaderGUI(QMainWindow):
         # The other buttons depend on task selection state,
         # so we'll update them based on the current selection
         self.on_task_selected()
-        
+    
     def log_activity(self, category, action, details, user=None):
         """
         Log an activity to the database
@@ -1046,39 +1063,41 @@ class S3UploaderGUI(QMainWindow):
             self.log_message(f"Error: Could not find task with ID {task_id}")
             return
         
-        # Enable modify and delete buttons for all task states
-        self.modify_task_btn.setEnabled(True)
-        self.delete_btn.setEnabled(True)
+        # Enable modify and delete buttons only when logged in
+        if self.user_info.get('is_logged_in', False):
+            self.modify_task_btn.setEnabled(True)
+            self.delete_btn.setEnabled(True)
+            self.cancel_btn.setEnabled(True)
+        else:
+            self.modify_task_btn.setEnabled(False)
+            self.delete_btn.setEnabled(False)
+            self.cancel_btn.setEnabled(False)
         
         self.log_message(f"Selected task {task_id} in state: {task['status']}")
         
+        # Start, Resume, Restart buttons are always enabled regardless of login status
         # Enable/disable buttons based on task status
         if task['status'] == 'running':
-            self.cancel_btn.setEnabled(True)
             self.pause_btn.setEnabled(True)
             self.resume_btn.setEnabled(False)
             self.restart_btn.setEnabled(False)
         elif task['status'] == 'paused':
-            self.cancel_btn.setEnabled(True)
             self.pause_btn.setEnabled(False)
             self.resume_btn.setEnabled(True)
             self.restart_btn.setEnabled(False)
         elif task['status'] in ['completed', 'cancelled']:
-            self.cancel_btn.setEnabled(False)
             self.pause_btn.setEnabled(False)
             self.resume_btn.setEnabled(False)
             self.restart_btn.setEnabled(True)
         elif task['status'] == 'pending':
-            self.cancel_btn.setEnabled(True)
             self.pause_btn.setEnabled(False)
             self.resume_btn.setEnabled(False)
             self.restart_btn.setEnabled(True)  # Enable restart for pending tasks
     
     def start_all_tasks(self):
         """Start all pending upload tasks"""
-        # Check if user is logged in first
-        if not self.ensure_user_logged_in():
-            return
+        # لا نحتاج للتحقق من تسجيل الدخول
+        # تم إزالة الشرط الذي يتحقق من تسجيل الدخول
             
         pending_tasks = [task for task in self.upload_tasks if task['status'] == 'pending']
         
@@ -1539,9 +1558,8 @@ class S3UploaderGUI(QMainWindow):
         """
         Resume the selected upload task
         """
-        # Check if user is logged in first
-        if not self.ensure_user_logged_in():
-            return
+        # لا نحتاج للتحقق من تسجيل الدخول
+        # تم إزالة الشرط الذي يتحقق من تسجيل الدخول
             
         selected_items = self.task_list.selectedItems()
         if not selected_items:
@@ -1582,9 +1600,8 @@ class S3UploaderGUI(QMainWindow):
         """
         Restart the selected upload task from the beginning
         """
-        # Check if user is logged in first
-        if not self.ensure_user_logged_in():
-            return
+        # لا نحتاج للتحقق من تسجيل الدخول
+        # تم إزالة الشرط الذي يتحقق من تسجيل الدخول
             
         selected_items = self.task_list.selectedItems()
         if not selected_items:
@@ -1836,7 +1853,39 @@ class S3UploaderGUI(QMainWindow):
             # Convert QDate to string format that MySQL can handle
             order_date = task['order_date']
             if isinstance(order_date, QDate):
-                order_date = order_date.toString('yyyy-MM-dd')
+                try:
+                    # تحقق من أن التاريخ صالح
+                    if order_date.isValid() and order_date.year() > 0:
+                        order_date = order_date.toString('yyyy-MM-dd')
+                    else:
+                        # استخدام التاريخ الحالي إذا كان التاريخ غير صالح
+                        current_date = QDate.currentDate()
+                        order_date = current_date.toString('yyyy-MM-dd')
+                        self.log_message(f"Warning: Invalid QDate found, using current date instead")
+                except Exception as date_error:
+                    # في حالة حدوث أي خطأ، استخدم التاريخ الحالي
+                    from datetime import datetime
+                    order_date = datetime.now().strftime('%Y-%m-%d')
+                    self.log_message(f"Error processing QDate: {str(date_error)}. Using current date.")
+            elif hasattr(order_date, 'strftime'):
+                # إذا كان datetime، قم بتحويله إلى سلسلة نصية
+                order_date = order_date.strftime('%Y-%m-%d')
+            elif isinstance(order_date, str):
+                # إذا كان بالفعل سلسلة نصية، تأكد من أنه بالتنسيق الصحيح
+                try:
+                    from datetime import datetime
+                    # حاول تحليل التاريخ للتأكد من صحته
+                    parsed_date = datetime.strptime(order_date, '%Y-%m-%d')
+                    order_date = parsed_date.strftime('%Y-%m-%d')
+                except ValueError:
+                    # إذا كان التنسيق غير صحيح، استخدم التاريخ الحالي
+                    order_date = datetime.now().strftime('%Y-%m-%d')
+                    self.log_message(f"Warning: Invalid date string format. Using current date.")
+            else:
+                # إذا كان التاريخ None أو نوع غير معروف، استخدم التاريخ الحالي
+                from datetime import datetime
+                order_date = datetime.now().strftime('%Y-%m-%d')
+                self.log_message(f"Warning: Unknown date type. Using current date.")
             
             cursor = self.db_manager.connection.cursor()
             
@@ -2469,34 +2518,7 @@ class S3UploaderGUI(QMainWindow):
             if paused_tasks:
                 self.log_message(f"Auto-resuming {len(paused_tasks)} paused tasks")
                 
-                # Auto-login if needed
-                if not self.user_info.get('is_logged_in', False):
-                    self.log_message("User not logged in, attempting auto-login")
-                    try:
-                        if hasattr(self.db_manager, 'auto_authenticate'):
-                            # Ensure database connection is open
-                            if not self.db_manager.connection or not self.db_manager.connection.is_connected():
-                                self.log_message("Reconnecting to database...")
-                                self.db_manager.connect()
-                                
-                            result = self.db_manager.auto_authenticate()
-                            if result:
-                                self.user_info.update(result)
-                                self.user_info['is_logged_in'] = True
-                                self.log_message(f"Auto-login successful as {self.user_info['Emp_FullName']}")
-                                self.user_info_label.setText(f"Welcome {self.user_info['Emp_FullName']}")
-                                self.login_button.setText("Logout")
-                                self.enable_authenticated_features()
-                            else:
-                                self.log_message("Auto-login failed, please login manually to resume tasks")
-                                return
-                        else:
-                            self.log_message("Cannot auto-login, please login manually to resume tasks")
-                            return
-                    except Exception as e:
-                        self.log_message(f"Error during auto-login attempt: {str(e)}")
-                        self.log_message("Please login manually to resume tasks")
-                        return
+                # تم إزالة التحقق من تسجيل الدخول هنا - نسمح باستئناف المهام بدون تسجيل الدخول
                 
                 # Start tasks one by one with longer delay between them
                 import time
@@ -2565,10 +2587,7 @@ class S3UploaderGUI(QMainWindow):
                 self.log_message(f"Task {task_id} is not in paused state, cannot resume")
                 return False
                 
-            # Check if login is needed
-            if not self.ensure_user_logged_in():
-                self.log_message("Auto-resume aborted: Authentication required")
-                return False
+            # تم إزالة التحقق من تسجيل الدخول هنا
                 
             self.log_message(f"Auto-resuming task {task_id} for order {task.get('order_number', 'unknown')}")
             

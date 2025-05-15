@@ -45,8 +45,9 @@ if [ $CRASH_COUNT -ge 3 ]; then
     # تعطيل التشغيل التلقائي للمهام 
     export AUTO_RESUME=0
 else
-    # تعيين متغير البيئة لاستئناف المهام تلقائياً
-    export AUTO_RESUME=1
+    # تعطيل استئناف المهام تلقائياً وتسجيل الدخول التلقائي
+    export AUTO_RESUME=0
+    export NO_AUTO_LOGIN=1
 fi
 
 # حفظ وقت التشغيل الحالي

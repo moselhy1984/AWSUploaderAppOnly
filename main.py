@@ -47,17 +47,21 @@ def main():
             # Still continue without database
         
         # Check for auto-resume flags
-        auto_resume = os.environ.get('NO_AUTO_RESUME', '0') != '1'
+        auto_resume = os.environ.get('NO_AUTO_RESUME', '0') != '1' and os.environ.get('AUTO_RESUME', '1') == '1'
         skip_state_load = os.environ.get('SKIP_STATE_LOAD', '0') == '1'
         
         # Check if we should load all tasks, not just today's
         load_all_tasks = os.environ.get('LOAD_ALL_TASKS', '0') == '1'
+        
+        # تعطيل تسجيل الدخول التلقائي
+        no_auto_login = os.environ.get('NO_AUTO_LOGIN', '0') == '1'
         
         print(f"Application configuration:")
         print(f"- Auto-resume: {auto_resume}")
         print(f"- Skip state load: {skip_state_load}")
         print(f"- Safe mode: {safe_mode}")
         print(f"- Load all tasks: {load_all_tasks}")
+        print(f"- Disable auto-login: {no_auto_login}")
         
         print("Loading secure configuration...")
         # Load AWS config
@@ -73,7 +77,9 @@ def main():
         
         # Initialize the main window
         print("Initializing main application window...")
-        window = S3UploaderGUI(aws_config, db_manager, result, skip_state_load=skip_state_load, auto_resume=auto_resume, safe_mode=safe_mode, load_all_tasks=load_all_tasks)
+        window = S3UploaderGUI(aws_config, db_manager, result, skip_state_load=skip_state_load, 
+                              auto_resume=auto_resume, safe_mode=safe_mode, 
+                              load_all_tasks=load_all_tasks, no_auto_login=no_auto_login)
         window.show()
         
         # Enable memory manager if available
@@ -87,7 +93,7 @@ def main():
                 print("Memory manager module not found, continuing without memory optimization")
             except Exception as mem_err:
                 print(f"Error initializing memory manager: {str(mem_err)}")
-        
+                
         # Auto Resume Incomplete Tasks
         if os.environ.get('AUTO_RESUME_INCOMPLETE', '0') == '1':
             print("[{}] Auto-resume for incomplete tasks is enabled".format(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
