@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (QMainWindow, QPushButton, QVBoxLayout,
                             QTextEdit, QFileDialog, QFrame, QMessageBox, QSystemTrayIcon,
                             QMenu, QDialog, QDateEdit, QComboBox, QListWidget, QListWidgetItem,
                             QTabWidget, QScrollArea, QGridLayout, QTextBrowser, QApplication,
-                            QTableWidget, QTableWidgetItem, QHeaderView)
+                            QTableWidget, QTableWidgetItem, QHeaderView, QProgressDialog)
 from PyQt5.QtCore import Qt, QThread, QSettings, QDate, QTimer
 from PyQt5.QtGui import QIcon
 
@@ -189,18 +189,36 @@ class S3UploaderGUI(QMainWindow):
         # User info panel
         user_frame = QFrame()
         user_frame.setFrameShape(QFrame.StyledPanel)
-        user_layout = QHBoxLayout()
+        user_layout = QVBoxLayout()  # تغيير من QHBoxLayout إلى QVBoxLayout
         
+        # قسم علوي يحتوي على ترحيب + زر تسجيل الدخول
+        top_layout = QHBoxLayout()
+        
+        # Welcome label on the left
         self.user_info_label = QLabel(f"Welcome {self.user_info['Emp_FullName']}")
-        user_layout.addWidget(self.user_info_label)
+        top_layout.addWidget(self.user_info_label)
         
-        # Add login/logout button
+        # Spacer to push login button to the right
+        top_layout.addStretch()
+        
+        # Login button on the right
         self.login_button = QPushButton("Logout" if self.user_info.get('is_logged_in', False) else "Login")
         self.login_button.clicked.connect(self.toggle_login)
-        user_layout.addWidget(self.login_button)
+        self.login_button.setMaximumWidth(80)  # جعل الزر أصغر
+        top_layout.addWidget(self.login_button)
         
+        # إضافة القسم العلوي إلى التصميم الرئيسي
+        user_layout.addLayout(top_layout)
+        
+        # قسم سفلي يحتوي على Device ID تحت Welcome
+        bottom_layout = QHBoxLayout()
         import getmac
-        user_layout.addWidget(QLabel(f"Device ID: {getmac.get_mac_address()}"))
+        device_id_label = QLabel(f"Device ID: {getmac.get_mac_address()}")
+        bottom_layout.addWidget(device_id_label)
+        bottom_layout.addStretch()  # إضافة مسافة فارغة على اليمين
+        
+        # إضافة القسم السفلي إلى التصميم الرئيسي
+        user_layout.addLayout(bottom_layout)
         
         user_frame.setLayout(user_layout)
         layout.addWidget(user_frame)
@@ -907,6 +925,138 @@ class S3UploaderGUI(QMainWindow):
             self.settings.setValue("local_storage_path", folder)
             self.log_message(f"Local storage location set to: {folder}")
     
+    def handle_completed_task_resubmission(self, task_data, existing_task):
+        """
+        Handle the scenario where a user is trying to resubmit a task that was previously completed
+        
+        Args:
+            task_data (dict): New task data the user is trying to add
+            existing_task (dict): Existing completed task from the database
+            
+        Returns:
+            bool: True if the task should be resubmitted, False if it should be skipped
+        """
+        # If the task is not completed, always allow resubmission
+        if existing_task.get('status', '').lower() != 'completed':
+            return True
+            
+        # Create a message about the existing completed task
+        folder_path = existing_task.get('folder_path', '')
+        completion_date = existing_task.get('completed_at', '')
+        completion_date_str = f" on {completion_date}" if completion_date else ""
+        
+        message = (f"Order {task_data['order_number']} was already successfully uploaded{completion_date_str}.\n\n"
+                  f"Original folder: {folder_path}\n"
+                  f"Completed by: {existing_task.get('last_action_by', 'Unknown')}\n\n"
+                  f"What would you like to do?")
+        
+        # Create a message box with options
+        from PyQt5.QtWidgets import QMessageBox
+        msgBox = QMessageBox(self)
+        msgBox.setWindowTitle("Task Already Completed")
+        msgBox.setText(message)
+        
+        # Add buttons for different actions
+        resumeButton = msgBox.addButton("Resume as New Task", QMessageBox.ActionRole)
+        scanButton = msgBox.addButton("Scan for Missing Files", QMessageBox.ActionRole)
+        cancelButton = msgBox.addButton("Cancel", QMessageBox.RejectRole)
+        
+        # Set the default button
+        msgBox.setDefaultButton(cancelButton)
+        
+        # Execute the dialog
+        msgBox.exec_()
+        
+        # Handle the user's choice
+        clickedButton = msgBox.clickedButton()
+        
+        if clickedButton == resumeButton:
+            # Create a fresh task, ignoring the completed status
+            self.log_message(f"User chose to add order {task_data['order_number']} as a new task despite previous completion")
+            return True
+            
+        elif clickedButton == scanButton:
+            # Create a temporary task object for scanning
+            temp_task = {
+                'order_number': task_data['order_number'],
+                'folder_path': task_data['folder_path'],
+                'local_path': task_data['local_path'],
+                'order_date': task_data['order_date']
+            }
+            
+            # Show a scanning dialog
+            from PyQt5.QtWidgets import QProgressDialog
+            progress = QProgressDialog("Scanning for missing files...", "Cancel", 0, 0, self)
+            progress.setWindowTitle("File Scan")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setValue(0)
+            progress.show()
+            
+            # Process events to make sure the dialog appears
+            QApplication.processEvents()
+            
+            # Scan for missing files
+            self.log_message(f"Scanning for missing files in order {task_data['order_number']}")
+            scan_results = self.scan_for_missing_files(temp_task)
+            
+            # Close the progress dialog
+            progress.close()
+            
+            if not scan_results:
+                QMessageBox.warning(
+                    self,
+                    "Scan Failed",
+                    "The scan for missing files failed. Please check the logs for details."
+                )
+                return False
+                
+            if scan_results['missing_files'] == 0:
+                # No missing files found
+                QMessageBox.information(
+                    self,
+                    "No Missing Files",
+                    f"All {scan_results['total_files']} files appear to be already uploaded to AWS S3.\n\n"
+                    f"If you still want to create a new task, click 'Resume as New Task' instead."
+                )
+                return False
+            else:
+                # Missing files found - ask user if they want to create a task for just these files
+                reply = QMessageBox.question(
+                    self,
+                    "Missing Files Found",
+                    f"Found {scan_results['missing_files']} files out of {scan_results['total_files']} "
+                    f"that have not been uploaded to AWS S3.\n\n"
+                    f"Would you like to create a task to upload only these missing files?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes
+                )
+                
+                if reply == QMessageBox.Yes:
+                    # Add the missing files list to the task data so it can be used by the uploader
+                    task_data['missing_files'] = scan_results['missing_file_list']
+                    task_data['upload_missing_only'] = True
+                    
+                    # Show some example missing files
+                    examples = scan_results['missing_file_list'][:5]
+                    example_str = "\n".join([f"- {ex}" for ex in examples])
+                    
+                    if len(scan_results['missing_file_list']) > 5:
+                        example_str += f"\n- And {len(scan_results['missing_file_list']) - 5} more..."
+                    
+                    QMessageBox.information(
+                        self,
+                        "Task Created for Missing Files",
+                        f"A task will be created to upload only the {scan_results['missing_files']} missing files.\n\n"
+                        f"Examples of missing files:\n{example_str}"
+                    )
+                    return True
+                else:
+                    return False
+            
+        else:  # Cancel button or dialog closed
+            self.log_message(f"User cancelled adding duplicate task for order {task_data['order_number']}")
+            return False
+    
     def add_photoshoot_task(self):
         """Open dialog for adding a new photoshoot upload task"""
         # Check if user is logged in first
@@ -923,6 +1073,82 @@ class S3UploaderGUI(QMainWindow):
         if dialog.exec_() == QDialog.Accepted:
             # Get task data from dialog
             task_data = dialog.get_task_data()
+            
+            # Check if the task with this order number already exists in the database
+            try:
+                if not self.db_manager.connection or not self.db_manager.connection.is_connected():
+                    self.db_manager.connect()
+                
+                # Find the correct primary key for the upload_tasks table
+                cursor = self.db_manager.connection.cursor(dictionary=True)
+                
+                # Check for task_id or id column
+                cursor.execute("""
+                SELECT COLUMN_NAME 
+                FROM information_schema.COLUMNS 
+                WHERE TABLE_SCHEMA = %s 
+                AND TABLE_NAME = 'upload_tasks' 
+                AND COLUMN_NAME IN ('task_id', 'id')
+                """, (self.db_manager.rds_config['database'],))
+                
+                id_columns = [row['COLUMN_NAME'] for row in cursor.fetchall()]
+                id_column = 'task_id' if 'task_id' in id_columns else id_columns[0] if id_columns else 'id'
+                
+                # Check if this order exists in the database
+                query = f"""
+                SELECT {id_column} as task_id, order_number, folder_path, status, completed_at, last_action_by
+                FROM upload_tasks 
+                WHERE order_number = %s
+                """
+                cursor.execute(query, (task_data['order_number'],))
+                existing_task = cursor.fetchone()
+                cursor.close()
+                
+                if existing_task:
+                    # We found this task already exists in the database
+                    # Check if it's completed and handle accordingly
+                    if not self.handle_completed_task_resubmission(task_data, existing_task):
+                        return  # User chose not to proceed with task creation
+                    
+                    # If we get here, user wants to proceed with the task
+                    # The existing task details will be retrieved from the database
+                    # in the task creation code below
+            except Exception as e:
+                self.log_message(f"Error checking for existing task: {str(e)}")
+                import traceback
+                self.log_message(traceback.format_exc())
+            
+            # Also check if the task is already in our current list
+            for task in self.upload_tasks:
+                if task['order_number'] == task_data['order_number']:
+                    # Ask user if they want to modify the existing task or create a new one
+                    from PyQt5.QtWidgets import QMessageBox
+                    reply = QMessageBox.question(
+                        self, 
+                        'Task Already Exists', 
+                        f'A task for Order {task_data["order_number"]} already exists in the current session.\n\n'
+                        f'Status: {task["status"].capitalize()}\n'
+                        f'Progress: {task.get("progress", 0)}%\n\n'
+                        f'Do you want to modify the existing task instead?',
+                        QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                        QMessageBox.Yes
+                    )
+                    
+                    if reply == QMessageBox.Yes:
+                        # Find the task item and select it
+                        for i in range(self.task_list.count()):
+                            item = self.task_list.item(i)
+                            task_id = item.data(Qt.UserRole)
+                            if isinstance(task_id, int) and task_id == task['id']:
+                                self.task_list.setCurrentItem(item)
+                                self.modify_selected_task()
+                                return
+                                
+                    elif reply == QMessageBox.Cancel:
+                        return
+                        
+                    # If No, we'll continue creating a new task
+                    break
             
             # Create a unique task ID
             task_id = len(self.upload_tasks) + 1
@@ -1283,6 +1509,12 @@ class S3UploaderGUI(QMainWindow):
             import time
             time.sleep(0.1)
             
+            # Check if we have a list of missing files to upload
+            missing_files_list = None
+            if 'missing_files' in task and task.get('upload_missing_only', False):
+                missing_files_list = task['missing_files']
+                self.log_message(f"Uploading {len(missing_files_list)} missing files for order {task['order_number']}")
+            
             # Create a new uploader or recreate one from saved state
             state_file = Path.home() / '.aws_uploader' / f"task_state_{task['order_number']}.json"
             if state_file.exists():
@@ -1297,7 +1529,8 @@ class S3UploaderGUI(QMainWindow):
                         self.aws_session,
                         task['photographers'],
                         task['local_path'],
-                        self
+                        self,
+                        missing_files_list=missing_files_list
                     )
                     
                     # Connect signals with task_id in a safer way - use weaker connections to prevent memory issues
@@ -1359,7 +1592,8 @@ class S3UploaderGUI(QMainWindow):
                         self.aws_session,
                         task['photographers'],
                         task['local_path'],
-                        self
+                        self,
+                        missing_files_list=missing_files_list
                     )
                     
                     # Connect signals with task_id
@@ -1848,235 +2082,123 @@ class S3UploaderGUI(QMainWindow):
             
             # Ensure folder_path and local_path are strings (not PosixPath)
             folder_path = str(task['folder_path']) if task['folder_path'] else ''
-            local_path = str(task.get('local_path', folder_path)) if task.get('local_path') else folder_path
+            local_path = str(task.get('local_path', folder_path)) or folder_path
             
-            # Convert QDate to string format that MySQL can handle
-            order_date = task['order_date']
-            if isinstance(order_date, QDate):
-                try:
-                    # تحقق من أن التاريخ صالح
-                    if order_date.isValid() and order_date.year() > 0:
-                        order_date = order_date.toString('yyyy-MM-dd')
-                    else:
-                        # استخدام التاريخ الحالي إذا كان التاريخ غير صالح
-                        current_date = QDate.currentDate()
-                        order_date = current_date.toString('yyyy-MM-dd')
-                        self.log_message(f"Warning: Invalid QDate found, using current date instead")
-                except Exception as date_error:
-                    # في حالة حدوث أي خطأ، استخدم التاريخ الحالي
-                    from datetime import datetime
-                    order_date = datetime.now().strftime('%Y-%m-%d')
-                    self.log_message(f"Error processing QDate: {str(date_error)}. Using current date.")
-            elif hasattr(order_date, 'strftime'):
-                # إذا كان datetime، قم بتحويله إلى سلسلة نصية
-                order_date = order_date.strftime('%Y-%m-%d')
-            elif isinstance(order_date, str):
-                # إذا كان بالفعل سلسلة نصية، تأكد من أنه بالتنسيق الصحيح
-                try:
-                    from datetime import datetime
-                    # حاول تحليل التاريخ للتأكد من صحته
-                    parsed_date = datetime.strptime(order_date, '%Y-%m-%d')
-                    order_date = parsed_date.strftime('%Y-%m-%d')
-                except ValueError:
-                    # إذا كان التنسيق غير صحيح، استخدم التاريخ الحالي
-                    order_date = datetime.now().strftime('%Y-%m-%d')
-                    self.log_message(f"Warning: Invalid date string format. Using current date.")
+            # Check if task already exists in the database by order number
+            cursor = self.db_manager.connection.cursor(dictionary=True)
+            
+            # Find the correct primary key for the upload_tasks table
+            cursor.execute("""
+            SELECT COLUMN_NAME 
+            FROM information_schema.COLUMNS 
+            WHERE TABLE_SCHEMA = %s 
+            AND TABLE_NAME = 'upload_tasks' 
+            AND COLUMN_NAME IN ('task_id', 'id')
+            """, (self.db_manager.rds_config['database'],))
+            
+            id_columns = [row['COLUMN_NAME'] for row in cursor.fetchall()]
+            id_column = 'task_id' if 'task_id' in id_columns else id_columns[0] if id_columns else 'id'
+            
+            # Check if task already exists
+            cursor.execute(f"""
+            SELECT {id_column} as task_id 
+            FROM upload_tasks 
+            WHERE order_number = %s
+            """, (task['order_number'],))
+            
+            existing_task = cursor.fetchone()
+            
+            # Initialize params
+            params = [
+                task.get('status', 'pending'),
+                task.get('progress', 0),
+                folder_path,
+                local_path,
+                task['order_number'],
+                state_path,
+                self.user_info.get('Emp_FullName'),
+                task.get('order_date', None)
+            ]
+            
+            # Include photographer IDs if available
+            if 'photographers' in task:
+                params.extend([
+                    task['photographers'].get('main'),
+                    task['photographers'].get('assistant'),
+                    task['photographers'].get('video')
+                ])
             else:
-                # إذا كان التاريخ None أو نوع غير معروف، استخدم التاريخ الحالي
-                from datetime import datetime
-                order_date = datetime.now().strftime('%Y-%m-%d')
-                self.log_message(f"Warning: Unknown date type. Using current date.")
-            
-            cursor = self.db_manager.connection.cursor()
-            
-            # First, check if the task_state_path column exists
-            cursor.execute("""
-            SELECT COUNT(*) as column_exists 
-            FROM information_schema.COLUMNS 
-            WHERE TABLE_SCHEMA = %s 
-            AND TABLE_NAME = 'upload_tasks' 
-            AND COLUMN_NAME = 'task_state_path'
-            """, (self.db_manager.rds_config['database'],))
-            
-            task_state_path_exists = cursor.fetchone()[0] > 0
-            
-            # Next, check if the employee tracking columns exist
-            cursor.execute("""
-            SELECT COUNT(*) as column_exists 
-            FROM information_schema.COLUMNS 
-            WHERE TABLE_SCHEMA = %s 
-            AND TABLE_NAME = 'upload_tasks' 
-            AND COLUMN_NAME = 'created_by'
-            """, (self.db_manager.rds_config['database'],))
-            
-            created_by_exists = cursor.fetchone()[0] > 0
-            
-            # Check if the task_id column exists
-            cursor.execute("""
-            SELECT COUNT(*) as column_exists 
-            FROM information_schema.COLUMNS 
-            WHERE TABLE_SCHEMA = %s 
-            AND TABLE_NAME = 'upload_tasks' 
-            AND COLUMN_NAME = 'task_id'
-            """, (self.db_manager.rds_config['database'],))
-            
-            has_task_id = cursor.fetchone()[0] > 0
-            
-            # Determine the ID column name to use in the WHERE clause
-            id_column = 'task_id' if has_task_id else 'id'
-            
-            self.log_message(f"Using database column '{id_column}' for task identification")
-            
-            # Get current user info for tracking
-            current_user = self.user_info.get('Emp_FullName', 'Unknown')
-            current_emp_id = self.user_info.get('Emp_ID')
-            
-            # Set created_by if not already set in task
-            if 'created_by' not in task and self.user_info.get('is_logged_in', False):
-                task['created_by'] = current_user
-                task['created_by_emp_id'] = current_emp_id
-            
-            # Always update last_action_by when saving
-            if self.user_info.get('is_logged_in', False):
-                task['last_action_by'] = current_user
-                task['last_action_by_emp_id'] = current_emp_id
-            
-            # Check if task already has a database ID
-            if task.get('db_id'):
-                # Build the update query based on which columns exist
-                update_fields = [
-                    "order_number = %s",
-                    "order_date = %s",
-                    "folder_path = %s",
-                    "local_path = %s",
-                    "status = %s",
-                    "progress = %s",
-                    "main_photographer_id = %s",
-                    "assistant_photographer_id = %s",
-                    "video_photographer_id = %s"
-                ]
+                params.extend([None, None, None])
                 
-                # Add task_state_path and last_state_update if they exist
-                if task_state_path_exists:
-                    update_fields.append("task_state_path = %s")
-                    update_fields.append("last_state_update = NOW()")
+            # Add completion timestamp if task is completed
+            completed_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S') if task.get('status') == 'completed' else None
+            params.append(completed_at)
+            
+            # Add the last person who took action on this task, if available
+            last_action_by = task.get('last_action_by', self.user_info.get('Emp_FullName'))
+            params.append(last_action_by)
+            
+            if existing_task:
+                # Update the existing task
+                self.log_message(f"Updating existing database entry for order {task['order_number']}")
                 
-                # Add employee tracking fields if they exist
-                if created_by_exists:
-                    update_fields.append("last_action_by = %s")
-                    update_fields.append("last_action_time = NOW()")
-                    update_fields.append("last_action_by_emp_id = %s")
-                    
-                    # Set created_by if null
-                    update_fields.append("created_by = COALESCE(created_by, %s)")
-                    update_fields.append("created_by_emp_id = COALESCE(created_by_emp_id, %s)")
-                
-                # Create the update query
-                query = f"""
-                UPDATE upload_tasks SET
-                    {", ".join(update_fields)}
+                # Calculate which fields to update
+                update_query = f"""
+                UPDATE upload_tasks SET 
+                status = %s, 
+                progress = %s,
+                folder_path = %s,
+                local_path = %s,
+                state_file_path = %s,
+                updated_by = %s,
+                order_date = %s,
+                main_photographer_id = %s,
+                assistant_photographer_id = %s,
+                video_photographer_id = %s,
+                completed_at = %s,
+                last_action_by = %s,
+                updated_at = NOW()
                 WHERE {id_column} = %s
                 """
                 
-                # Create values tuple based on which columns are included
-                values = [
-                    task['order_number'],
-                    order_date,  # Use the converted date
-                    folder_path,
-                    local_path,
-                    task['status'],
-                    task.get('progress', 0),
-                    task.get('photographers', {}).get('main'),
-                    task.get('photographers', {}).get('assistant'),
-                    task.get('photographers', {}).get('video')
-                ]
+                # Add task ID to params
+                params.append(existing_task['task_id'])
                 
-                # Add task_state_path if included in the query
-                if task_state_path_exists:
-                    values.append(state_path)
-                
-                # Add employee tracking values if included
-                if created_by_exists:
-                    values.append(task.get('last_action_by', current_user))
-                    values.append(task.get('last_action_by_emp_id', current_emp_id))
-                    values.append(task.get('created_by', current_user))
-                    values.append(task.get('created_by_emp_id', current_emp_id))
-                
-                # Add the ID as the last parameter
-                values.append(task['db_id'])
-                
-                cursor.execute(query, tuple(values))
+                # Execute the update
+                cursor.execute(update_query, params)
                 self.db_manager.connection.commit()
-                cursor.close()
                 
-                return task['db_id']
-            
-            else:
-                # For inserting, build the appropriate column list and values
-                insert_columns = [
-                    "order_number", "order_date", "folder_path", "local_path",
-                    "status", "progress",
-                    "main_photographer_id", "assistant_photographer_id", "video_photographer_id"
-                ]
-                
-                values = [
-                    task['order_number'],
-                    order_date,  # Use the converted date
-                    folder_path,
-                    local_path,
-                    task['status'],
-                    task.get('progress', 0),
-                    task.get('photographers', {}).get('main'),
-                    task.get('photographers', {}).get('assistant'),
-                    task.get('photographers', {}).get('video')
-                ]
-                
-                # Add task_state_path if it exists
-                if task_state_path_exists:
-                    insert_columns.append("task_state_path")
-                    insert_columns.append("last_state_update")
-                    values.append(state_path)
-                    placeholders = ["%s"] * (len(insert_columns) - 1) + ["NOW()"]
-                else:
-                    placeholders = ["%s"] * len(insert_columns)
-                
-                # Add employee tracking columns if they exist
-                if created_by_exists:
-                    insert_columns.append("created_by")
-                    insert_columns.append("last_action_by")
-                    insert_columns.append("last_action_time")
-                    insert_columns.append("created_by_emp_id")
-                    insert_columns.append("last_action_by_emp_id")
-                    
-                    values.append(task.get('created_by', current_user))
-                    values.append(task.get('last_action_by', current_user))
-                    values.append(task.get('created_by_emp_id', current_emp_id))
-                    values.append(task.get('last_action_by_emp_id', current_emp_id))
-                    
-                    # Adjust placeholders for the timestamp
-                    placeholders.append("%s")  # created_by
-                    placeholders.append("%s")  # last_action_by
-                    placeholders.append("NOW()")  # last_action_time
-                    placeholders.append("%s")  # created_by_emp_id
-                    placeholders.append("%s")  # last_action_by_emp_id
-                
-                # Create the insert query
-                query = f"""
-                INSERT INTO upload_tasks
-                ({", ".join(insert_columns)})
-                VALUES ({", ".join(placeholders)})
-                """
-                
-                cursor.execute(query, tuple(values))
-                db_id = cursor.lastrowid
-                self.db_manager.connection.commit()
-                cursor.close()
-                
-                # Store database ID in task
+                # Store the database ID in the task
+                db_id = existing_task['task_id']
                 task['db_id'] = db_id
                 
-                self.log_message(f"Created new task record in database (ID: {db_id})")
-                return db_id
+            else:
+                # Insert as a new task
+                self.log_message(f"Inserting new database entry for order {task['order_number']}")
+                
+                # Create the insert query
+                fields = [
+                    "status", "progress", "folder_path", "local_path", "order_number", 
+                    "state_file_path", "created_by", "order_date", 
+                    "main_photographer_id", "assistant_photographer_id", "video_photographer_id",
+                    "completed_at", "last_action_by"
+                ]
+                
+                placeholders = ", ".join(["%s"] * len(fields))
+                fields_str = ", ".join(fields)
+                
+                insert_query = f"INSERT INTO upload_tasks ({fields_str}, created_at) VALUES ({placeholders}, NOW())"
+                
+                # Execute the insert
+                cursor.execute(insert_query, params)
+                self.db_manager.connection.commit()
+                
+                # Get the new task ID
+                db_id = cursor.lastrowid
+                task['db_id'] = db_id
+                
+            cursor.close()
+            return db_id
             
         except Exception as e:
             self.log_message(f"Error saving task to database: {str(e)}")
@@ -2219,6 +2341,14 @@ class S3UploaderGUI(QMainWindow):
             
             self.log_message("Searching for saved tasks...")
 
+            # Create a tracking set of all order numbers already loaded
+            # to avoid duplicates from different sources
+            loaded_order_numbers = set()
+            
+            # Get all order numbers already in memory
+            for task in self.upload_tasks:
+                loaded_order_numbers.add(task['order_number'])
+            
             # Load tasks from database if load_all_tasks is enabled
             if hasattr(self, 'load_all_tasks') and self.load_all_tasks:
                 self.log_message("Loading ALL incomplete tasks from database...")
@@ -2245,34 +2375,56 @@ class S3UploaderGUI(QMainWindow):
                         id_column = 'task_id' if 'task_id' in id_columns else id_columns[0]
                         self.log_message(f"Using database column '{id_column}' for task identification")
                         
+                        # Get environment variables to control task loading behavior
+                        load_completed = os.environ.get('LOAD_COMPLETED_TASKS', '0') == '1'
+                        ignore_completed = os.environ.get('IGNORE_COMPLETED_TASKS', '1') == '1'
+                        
+                        # Log loading criteria
+                        if load_completed:
+                            self.log_message("Including completed tasks in loading")
+                        elif ignore_completed:
+                            self.log_message("Ignoring completed tasks as configured")
+                        
                         # Query the database for incomplete tasks
                         query = f"""
                         SELECT {id_column} as task_id, order_number, folder_path, local_path, 
                                status, progress, created_at, order_date, 
                                main_photographer_id, assistant_photographer_id, video_photographer_id
                         FROM upload_tasks 
-                        WHERE status != 'completed' AND status != 'cancelled'
+                        WHERE 1=1
                         """
+                        
+                        # Add status filter if not loading all tasks
+                        if not load_completed and ignore_completed:
+                            query += " AND status != 'completed' AND status != 'cancelled'"
                         
                         # Execute the query
                         cursor.execute(query)
                         
                         # Process the results
                         results = cursor.fetchall()
-                        self.log_message(f"Found {len(results)} incomplete tasks in database")
+                        self.log_message(f"Found {len(results)} tasks in database matching criteria")
+                        
+                        loaded_count = 0
+                        skipped_count = 0
                         
                         for db_task in results:
                             # Access data using dictionary keys
                             order_number = db_task['order_number']
+                            
+                            # Skip tasks that are already in the list
+                            if order_number in loaded_order_numbers:
+                                skipped_count += 1
+                                self.log_message(f"Task for order {order_number} already exists, skipping")
+                                continue
+                            
+                            # Add this order to our tracking set
+                            loaded_order_numbers.add(order_number)
+                            
                             folder_path = db_task.get('folder_path', '')
                             local_path = db_task.get('local_path', folder_path) or folder_path
                             task_status = db_task.get('status', 'paused')
                             progress = db_task.get('progress', 0)
-                            
-                            # Skip tasks that are already in the list
-                            if any(t['order_number'] == order_number for t in self.upload_tasks):
-                                self.log_message(f"Task for order {order_number} already exists, skipping")
-                                continue
                             
                             # Check if the folder path exists
                             path_exists = os.path.exists(folder_path) if folder_path else False
@@ -2306,8 +2458,10 @@ class S3UploaderGUI(QMainWindow):
                             # Add task to list and update UI
                             self.upload_tasks.append(task)
                             self.update_task_list(task)
+                            loaded_count += 1
                             self.log_message(f"Added task for order {order_number} from database (status: {task_status})")
-                            
+                        
+                        self.log_message(f"Database load summary: Added {loaded_count} tasks, skipped {skipped_count} duplicates")
                         cursor.close()
                 except Exception as e:
                     self.log_message(f"Error loading tasks from database: {str(e)}")
@@ -2345,15 +2499,19 @@ class S3UploaderGUI(QMainWindow):
                                     continue
                                 
                                 # Skip if we already have this order in our tasks
-                                if any(t['order_number'] == order_number for t in self.upload_tasks):
+                                if order_number in loaded_order_numbers:
                                     self.log_message(f"Task for order {order_number} already loaded, skipping state file")
                                     continue
+                                
+                                # Add to tracking set
+                                loaded_order_numbers.add(order_number)
                                 
                                 self.log_message(f"Loading state for order number: {order_number}")
                             except (IndexError, ValueError) as e:
                                 self.log_message(f"Error parsing order number from filename {state_file.name}: {str(e)}")
                                 continue
                             
+                            # Rest of the code remains the same
                             # Check for required fields in state file
                             required_fields = ['order_number', 'folder_path']
                             missing_fields = [field for field in required_fields if field not in state]
@@ -3807,3 +3965,164 @@ class S3UploaderGUI(QMainWindow):
             if self.safe_mode:
                 self.log_message("Creating mock AWS session for safe mode")
                 self.aws_session = type('MockSession', (), {'client': lambda *args, **kwargs: None})
+
+    def scan_for_missing_files(self, task):
+        """
+        Scan a task's local directory and compare with files already uploaded to S3
+        to find any files that haven't been uploaded yet.
+        
+        Args:
+            task (dict): Task to scan for missing files
+            
+        Returns:
+            dict: Information about the scan results including:
+                  - total_files: Total number of local files
+                  - uploaded_files: Number of files already uploaded
+                  - missing_files: Number of files not yet uploaded
+                  - missing_file_list: List of file paths that need to be uploaded
+        """
+        self.log_message(f"Scanning for missing files in order {task['order_number']}...")
+        
+        try:
+            from pathlib import Path
+            import os
+            import boto3
+            
+            # Make sure we have an AWS session
+            if not hasattr(self, 'aws_session') or not self.aws_session:
+                self.init_aws_session()
+            
+            if not self.aws_session:
+                self.log_message("Error: No AWS session available for scanning S3")
+                return None
+            
+            # Get the folder path
+            folder_path = task.get('local_path') or task.get('folder_path')
+            if not folder_path or not os.path.exists(folder_path):
+                self.log_message(f"Error: Path not found: {folder_path}")
+                return None
+                
+            # Create S3 client using session
+            s3_client = self.aws_session.client('s3')
+            
+            # Get bucket name from config
+            bucket_name = self.aws_config.get('AWS_S3_BUCKET', 'balistudiostorage')
+            
+            # Build the S3 prefix based on order number and date
+            order_num = task['order_number']
+            order_date = task.get('order_date')
+            
+            # Format date as YYYY-MM-DD if it's a QDate
+            if isinstance(order_date, QDate) and order_date.isValid():
+                date_str = order_date.toString('yyyy-MM-dd')
+            elif hasattr(order_date, 'strftime'):
+                date_str = order_date.strftime('%Y-%m-%d')
+            elif isinstance(order_date, str):
+                date_str = order_date
+            else:
+                # If no valid date, use current date
+                from datetime import datetime
+                date_str = datetime.now().strftime('%Y-%m-%d')
+            
+            # Construct the S3 prefix (directory path in S3)
+            s3_prefix = f"orders/{date_str}/{order_num}/"
+            
+            # Scan local files
+            local_files = []
+            local_file_sizes = {}
+            
+            try:
+                # Walk through the directory and collect all files
+                for root, dirs, files in os.walk(folder_path):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        rel_path = os.path.relpath(file_path, folder_path)
+                        
+                        # Skip temporary files and hidden files
+                        if file.startswith('.') or file.endswith('.tmp') or file.endswith('.crdownload'):
+                            continue
+                            
+                        # Get file size for comparison
+                        try:
+                            file_size = os.path.getsize(file_path)
+                            local_files.append(rel_path)
+                            local_file_sizes[rel_path] = file_size
+                        except OSError:
+                            self.log_message(f"Warning: Could not access file: {file_path}")
+                
+                self.log_message(f"Found {len(local_files)} local files in {folder_path}")
+            except Exception as e:
+                self.log_message(f"Error scanning local directory: {str(e)}")
+                return None
+            
+            # List files in S3
+            s3_files = []
+            s3_file_sizes = {}
+            
+            try:
+                # Use pagination to handle large directories
+                paginator = s3_client.get_paginator('list_objects_v2')
+                pages = paginator.paginate(Bucket=bucket_name, Prefix=s3_prefix)
+                
+                for page in pages:
+                    if 'Contents' in page:
+                        for obj in page['Contents']:
+                            # Get the key (path) and remove the prefix to get the relative path
+                            key = obj['Key']
+                            if key.startswith(s3_prefix):
+                                rel_key = key[len(s3_prefix):]
+                                s3_files.append(rel_key)
+                                s3_file_sizes[rel_key] = obj['Size']
+                
+                self.log_message(f"Found {len(s3_files)} files already uploaded to S3 in {s3_prefix}")
+            except Exception as e:
+                self.log_message(f"Error listing S3 objects: {str(e)}")
+                return None
+            
+            # Find missing files (files in local directory but not in S3)
+            missing_files = []
+            size_mismatch_files = []
+            
+            for file in local_files:
+                if file not in s3_files:
+                    missing_files.append(file)
+                elif local_file_sizes.get(file, 0) != s3_file_sizes.get(file, -1):
+                    # Size mismatch means the file might be partially uploaded
+                    size_mismatch_files.append(file)
+            
+            # Combine missing and size mismatched files as both need to be uploaded
+            all_missing_files = missing_files + size_mismatch_files
+            
+            # Log the results
+            self.log_message(f"Scan results for order {order_num}:")
+            self.log_message(f" - Total local files: {len(local_files)}")
+            self.log_message(f" - Files already in S3: {len(s3_files)}")
+            self.log_message(f" - Files missing from S3: {len(missing_files)}")
+            self.log_message(f" - Files with size mismatch: {len(size_mismatch_files)}")
+            
+            # If there are missing files, log some examples
+            if all_missing_files:
+                examples = all_missing_files[:5]
+                self.log_message("Examples of missing files:")
+                for example in examples:
+                    self.log_message(f" - {example}")
+                
+                if len(all_missing_files) > 5:
+                    self.log_message(f" - And {len(all_missing_files) - 5} more...")
+            
+            # Create a result summary
+            result = {
+                'total_files': len(local_files),
+                'uploaded_files': len(s3_files),
+                'missing_files': len(all_missing_files),
+                'missing_file_list': all_missing_files,
+                'has_partial_uploads': len(size_mismatch_files) > 0
+            }
+            
+            return result
+            
+        except Exception as e:
+            self.log_message(f"Error scanning for missing files: {str(e)}")
+            import traceback
+            self.log_message(traceback.format_exc())
+            return None

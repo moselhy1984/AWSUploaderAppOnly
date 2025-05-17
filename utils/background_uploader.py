@@ -25,7 +25,7 @@ class BackgroundUploader(QThread):
     finished = pyqtSignal()
 
     def __init__(self, folder_path, order_number, order_date, aws_session, 
-                 photographers, local_path=None, parent=None):
+                 photographers, local_path=None, parent=None, missing_files_list=None):
         super().__init__(parent)
         self.folder_path = folder_path
         self.order_number = order_number
@@ -33,6 +33,7 @@ class BackgroundUploader(QThread):
         self.aws_session = aws_session
         self.photographers = photographers
         self.local_path = local_path
+        self.missing_files_list = missing_files_list  # Lista de archivos pendientes
         self._is_running = True
         self._is_paused = False  # Pause state variable
         self._pause_mutex = QMutex()  # mutex for synchronization
@@ -47,6 +48,15 @@ class BackgroundUploader(QThread):
         self.state_dir = Path.home() / '.aws_uploader'
         self.state_dir.mkdir(exist_ok=True)
         self.state_file = self.state_dir / f"task_state_{order_number}.json"
+        
+        # If we have a missing files list, log the first few items for debugging
+        if missing_files_list and len(missing_files_list) > 0:
+            self.log.emit(f"Initialized with {len(missing_files_list)} missing files to upload")
+            examples = missing_files_list[:3]
+            for i, example in enumerate(examples):
+                self.log.emit(f"Missing file {i+1}: {example}")
+            if len(missing_files_list) > 3:
+                self.log.emit(f"...and {len(missing_files_list) - 3} more files")
     
     def stop(self):
         """Stop the upload process"""
@@ -94,7 +104,9 @@ class BackgroundUploader(QThread):
                 'all_files': self._convert_paths_to_str(self.all_files[:1000] if len(self.all_files) > 1000 else self.all_files),
                 # Add timestamp for debugging
                 'last_saved': datetime.now().isoformat(),
-                'status': 'paused' if self._is_paused else 'running'
+                'status': 'paused' if self._is_paused else 'running',
+                # Save missing files list if provided
+                'missing_files_list': self.missing_files_list
             }
             
             # Validate state before saving to prevent corrupted files
@@ -250,74 +262,62 @@ class BackgroundUploader(QThread):
                         primary_success = True
                     except Exception as temp_error:
                         self.log.emit(f"Failed to restore state from temporary file: {str(temp_error)}")
-                
-                # If all recovery attempts failed
-                if not primary_success:
-                    self.log.emit("All state restoration attempts failed")
-                    return False
             
-            # Verify required fields exist in state
-            required_fields = ['order_number', 'folder_path', 'current_file_index', 'total_files']
-            missing_fields = [field for field in required_fields if field not in state]
-            if missing_fields:
-                self.log.emit(f"State file missing essential fields: {', '.join(missing_fields)}")
+            if not primary_success:
+                # If all attempts failed, we can't load state
+                self.log.emit("Could not load any valid state file")
                 return False
             
-            # Load state values with validation
-            self.folder_path = state['folder_path']
-            self.order_number = state['order_number']
-            
-            # Handle loading order_date which might be stored as string
-            try:
-                if isinstance(state['order_date'], str):
-                    # Try to parse ISO format first
-                    try:
-                        self.order_date = datetime.fromisoformat(state['order_date'])
-                    except (ValueError, TypeError):
-                        # Fallback for other string formats
-                        self.order_date = state['order_date']
-                else:
-                    self.order_date = state['order_date']
-            except (KeyError, ValueError) as e:
-                self.log.emit(f"Warning: Error loading order date: {str(e)}")
-                self.order_date = datetime.now()  # Fallback to current date
-            
-            # Load photographers dictionary or use empty dict as fallback
-            if 'photographers' in state and isinstance(state['photographers'], dict):
-                self.photographers = state['photographers']
+            # Validate required fields
+            if not state.get('order_number') or state.get('order_number') != self.order_number:
+                self.log.emit(f"State file for wrong order number. Expected {self.order_number}, got {state.get('order_number')}")
+                return False
+                
+            # Some versions have different folder_path format
+            if isinstance(state.get('folder_path'), list):
+                self.log.emit("State file has old format folder_path (list)")
+                folder_str = str(self.folder_path)
+                self.log.emit(f"Using current folder path: {folder_str}")
             else:
-                self.log.emit("Warning: Photographer data not found in state file")
-                self.photographers = {}
+                # Use folder path from state if not already set
+                folder_from_state = state.get('folder_path')
+                if folder_from_state and not self.folder_path:
+                    self.log.emit(f"Using folder path from state: {folder_from_state}")
+                    self.folder_path = folder_from_state
             
-            # Load local_path with fallback to folder_path
-            self.local_path = state.get('local_path', self.folder_path)
+            # Use local path from state if not already set
+            local_path_from_state = state.get('local_path')
+            if local_path_from_state and not self.local_path:
+                self.log.emit(f"Using local path from state: {local_path_from_state}")
+                self.local_path = local_path_from_state
             
-            # Load paused state
-            self._is_paused = state.get('is_paused', True)  # Default to paused
+            # Set completion data
+            self.uploaded_file_count = state.get('uploaded_file_count', 0)
+            self.skipped_file_count = state.get('skipped_file_count', 0)
+            self.total_files = state.get('total_files', 0)
+            self.current_file_index = state.get('current_file_index', 0)
+            self.completed_files = state.get('completed_files', [])
             
-            # Load file counters with validation
-            self.uploaded_file_count = max(0, state.get('uploaded_file_count', 0))
-            self.skipped_file_count = max(0, state.get('skipped_file_count', 0))
-            self.total_files = max(0, state.get('total_files', 0))
+            # Set pause state
+            pause_state = state.get('is_paused', False)
+            locker = QMutexLocker(self._pause_mutex)
+            self._is_paused = pause_state
             
-            # Load completed files array with validation
-            if 'completed_files' in state and isinstance(state['completed_files'], list):
-                self.completed_files = state['completed_files']
-            else:
-                self.completed_files = []
+            # Load missing files list if it exists in the saved state
+            if 'missing_files_list' in state and not self.missing_files_list:
+                self.missing_files_list = state.get('missing_files_list')
+                self.log.emit(f"Loaded {len(self.missing_files_list)} missing files from saved state")
             
-            # Load current file index with validation
-            self.current_file_index = max(0, min(state.get('current_file_index', 0), 
-                                              state.get('total_files', 0) - 1))
+            # Get all files - need to be careful because it might be a very large list
+            all_files_from_state = state.get('all_files', [])
+            if all_files_from_state:
+                self.all_files = all_files_from_state
+                self.log.emit(f"Loaded {len(self.all_files)} files from state")
+                self.log.emit(f"Resuming upload of order {self.order_number} at file {self.current_file_index+1}/{self.total_files}")
             
-            # Load all_files array with validation
-            if 'all_files' in state and isinstance(state['all_files'], list):
-                self.all_files = state['all_files']
-            else:
-                self.log.emit("Warning: File list not found in state file")
-                self.all_files = []  # Will be reconstructed in run()
+            # Log important state values
+            self.log.emit(f"State loaded: files={self.total_files}, current={self.current_file_index}, uploaded={self.uploaded_file_count}")
             
-            self.log.emit(f"Upload state loaded for order {self.order_number} (index: {self.current_file_index+1}/{self.total_files})")
             return True
             
         except Exception as e:
@@ -522,363 +522,220 @@ class BackgroundUploader(QThread):
         
         # Initialize S3 client
         try:
-            # Check if aws_session is None or missing required attributes
-            if self.aws_session is None:
-                self.log.emit("Error: AWS session is not available")
-                return
+            # Use the supplied AWS session to initialize S3 client
+            s3_client = self.aws_session.client('s3')
+            bucket_name = self.aws_session.bucket_name if hasattr(self.aws_session, 'bucket_name') else "balistudiostorage"
             
-            # Check if aws_session has bucket_name attribute
-            if not hasattr(self.aws_session, 'bucket_name'):
-                # Try to get from parent configuration
-                parent = self.parent()
-                if parent and hasattr(parent, 'aws_config'):
-                    bucket_name = parent.aws_config.get('AWS_S3_BUCKET', 'balistudiostorage')
-                    # Attach to aws_session
-                    self.aws_session.bucket_name = bucket_name
-                    self.log.emit(f"Using bucket name from parent config: {bucket_name}")
+            self.log.emit(f"Connected to AWS S3 bucket: {bucket_name}")
+            
+            # Check if files were previously loaded from state
+            if not self.all_files:
+                # First time loading files
+                # If we have a missing_files_list, use that instead of scanning the directory
+                if self.missing_files_list and len(self.missing_files_list) > 0:
+                    self.log.emit(f"Using provided list of {len(self.missing_files_list)} missing files")
+                    
+                    # Convert relative paths to full paths
+                    base_path = self.local_path if self.local_path else self.folder_path
+                    all_files = []
+                    
+                    for rel_path in self.missing_files_list:
+                        full_path = os.path.join(base_path, rel_path)
+                        if os.path.exists(full_path):
+                            all_files.append(full_path)
+                        else:
+                            self.log.emit(f"Warning: Missing file not found: {full_path}")
+                    
+                    self.all_files = all_files
+                    self.total_files = len(all_files)
+                    
+                    self.log.emit(f"Prepared {self.total_files} missing files for upload")
+                    
+                elif self.local_path and os.path.isdir(self.local_path):
+                    # If local_path is set and is a directory, get files from there
+                    self.log.emit(f"Getting files from local path: {self.local_path}")
+                    all_files = []
+                    
+                    # Walk through directory and collect files
+                    for root, dirs, files in os.walk(self.local_path):
+                        for file in files:
+                            # Skip hidden files and temporary files
+                            if file.startswith('.') or '.tmp' in file or '.crdownload' in file:
+                                continue
+                                
+                            file_path = os.path.join(root, file)
+                            all_files.append(file_path)
+                    
+                    self.all_files = all_files
+                    self.total_files = len(all_files)
+                    
+                    self.log.emit(f"Found {self.total_files} files in: {self.local_path}")
+                    
+                elif self.folder_path and os.path.isdir(self.folder_path):
+                    # Get files from folder_path
+                    self.log.emit(f"Getting files from folder path: {self.folder_path}")
+                    all_files = []
+                    
+                    # Walk through directory and collect files
+                    for root, dirs, files in os.walk(self.folder_path):
+                        for file in files:
+                            # Skip hidden files and temporary files
+                            if file.startswith('.') or '.tmp' in file or '.crdownload' in file:
+                                continue
+                                
+                            file_path = os.path.join(root, file)
+                            all_files.append(file_path)
+                    
+                    self.all_files = all_files
+                    self.total_files = len(all_files)
+                    
+                    self.log.emit(f"Found {self.total_files} files in: {self.folder_path}")
+                    
                 else:
-                    # Try to get from environment
-                    import os
-                    bucket_name = os.environ.get('AWS_S3_BUCKET', 'balistudiostorage')
-                    self.aws_session.bucket_name = bucket_name
-                    self.log.emit(f"Using bucket name from environment: {bucket_name}")
+                    # No valid path, can't upload
+                    self.log.emit("Error: No valid folder path or local path specified")
+                    return
             
-            # Create S3 client
-            s3 = self.aws_session.client('s3',
-                config=boto3.session.Config(
-                    signature_version='s3v4',
-                    s3={'addressing_style': 'path'}
-                )
-            )
-            
-            # Si el cliente S3 es None, tratarlo como una sesión simulada
-            if s3 is None:
-                self.log.emit("Detected mock session with None s3 client")
-                raise AttributeError("S3 client is None")
+            # Ensure we have a reasonable total_files value
+            if self.total_files <= 0 and len(self.all_files) > 0:
+                self.total_files = len(self.all_files)
                 
-        except AttributeError as attr_error:
-            self.log.emit(f"Error creating AWS connection: AWS session missing required attributes - {str(attr_error)}")
-            self.log.emit("Please configure valid AWS credentials before uploading.")
-            return
-        except Exception as e:
-            self.log.emit(f"Error creating AWS connection: {str(e)}")
-            self.log.emit("Please check your AWS configuration and try again.")
-            return
-        
-        # Prepare path structure
-        try:
-            year = self.order_date.year
-            month = f"{self.order_date.month:02d}-{year}"
-            day = f"{self.order_date.day:02d}-{month}"
-            base_prefix = f"{year}/{month}/{day}/Order_{self.order_number}"
-        except Exception as e:
-            self.log.emit(f"Error creating path structure: {str(e)}")
-            # Use fallback path structure with current date
-            now = datetime.now()
-            year = now.year
-            month = f"{now.month:02d}-{year}"
-            day = f"{now.day:02d}-{month}"
-            base_prefix = f"{year}/{month}/{day}/Order_{self.order_number}"
-            self.log.emit(f"Using alternative path structure: {base_prefix}")
-        
-        # Verify bucket exists
-        try:
-            s3.head_bucket(Bucket=self.aws_session.bucket_name)
-            self.log.emit(f"Connected to bucket: {self.aws_session.bucket_name}")
-        except ClientError as e:
-            error_code = e.response.get('Error', {}).get('Code', 'Unknown')
-            if error_code == '403':
-                self.log.emit("Error: Access denied. Please check AWS permissions.")
-            elif error_code == '404':
-                self.log.emit("Error: Bucket does not exist. Please check bucket name.")
-            else:
-                self.log.emit(f"AWS error: {str(e)}")
-            return
-            
-        # If we don't have files from a previous session or state couldn't be loaded, scan for files
-        if not self.all_files or len(self.all_files) == 0:
-            # Organize files by extension before uploading
-            self.log.emit("Organizing files by extension before upload...")
-            try:
-                self.organize_files_by_extension()
-            except Exception as e:
-                self.log.emit(f"Error organizing files: {str(e)}")
-                # Continue without organizing if there's an error
-            
-            # Process the local path folders to maintain the same structure
-            self.log.emit("Scanning local folders to maintain structure...")
-            
-            # Ensure folder_path and local_path are strings
-            folder_path = str(self.folder_path) if isinstance(self.folder_path, Path) else self.folder_path
-            local_path = str(self.local_path) if isinstance(self.local_path, Path) else self.local_path
-            
-            # Track all files to be uploaded
-            self.all_files = []
-            
-            # Process main categories (CR2, JPG, Reels/Videos)
-            categories = ["CR2", "JPG", "Reels/Videos", "OTHER"]
-            
-            for category in categories:
-                category_path = Path(local_path) / category
-                if not category_path.exists():
-                    self.log.emit(f"Category folder {category} doesn't exist, skipping.")
-                    continue
+            # Validate current file index is within range
+            if self.current_file_index >= self.total_files:
+                self.log.emit(f"Warning: Current file index ({self.current_file_index}) is >= total files ({self.total_files})")
+                self.current_file_index = 0
                 
-                self.log.emit(f"Processing folder {category}...")
-                
-                # If it's a deep path like "Reels/Videos", handle properly
-                if "/" in category:
-                    parts = category.split("/")
-                    s3_category_prefix = "/".join(parts)
-                else:
-                    s3_category_prefix = category
-                
-                try:
-                    # Walk through all files in this category folder
-                    for file_path in category_path.rglob('*'):
-                        if not file_path.is_file() or not self._is_running:
-                            continue
-                        
-                        # Calculate relative path from the category folder
-                        rel_path = file_path.relative_to(category_path)
-                        
-                        # S3 key preserves the folder structure
-                        s3_key = f"{base_prefix}/{s3_category_prefix}/{rel_path}"
-                        
-                        try:
-                            file_size = file_path.stat().st_size
-                            
-                            self.all_files.append({
-                                'local_path': str(file_path),  # Convert Path to string
-                                's3_key': s3_key,
-                                'size': file_size,
-                                'category': category
-                            })
-                        except Exception as file_err:
-                            self.log.emit(f"Error in file {file_path}: {str(file_err)}")
-                except Exception as category_err:
-                    self.log.emit(f"Error processing category {category}: {str(category_err)}")
+            # Emit initial progress
+            self.progress.emit(self.current_file_index, self.total_files)
             
-            # Calculate total files and start uploading
-            self.total_files = len(self.all_files)
-            self.log.emit(f"Found {self.total_files} files to process")
+            # Get date parts for constructing S3 path
+            date_str = self._parse_order_date()
             
-            # Get list of already uploaded files from database to optimize skipping
-            try:
-                uploaded_files = self.get_uploaded_files(self.order_number)
-                uploaded_file_keys = set(uploaded_files)
-                
-                self.log.emit(f"Found {len(uploaded_file_keys)} files already uploaded in database")
-                
-                # Set completed files from previous uploads
-                self.completed_files = list(uploaded_file_keys)
-            except Exception as db_err:
-                self.log.emit(f"Error querying database: {str(db_err)}")
-                self.completed_files = []
-            
-            # Reset counters for new uploads
-            self.current_file_index = 0
-            self.uploaded_file_count = 0
-            self.skipped_file_count = 0
-            
-            # Save initial state
-            self.save_state()
-        else:
-            self.log.emit(f"Resuming upload with {self.total_files} files, starting from file {self.current_file_index+1}")
-        
-        # Initialize counters for resumed upload
-        processed_files = self.current_file_index
-        uploaded_files = self.uploaded_file_count
-        skipped_files = self.skipped_file_count
-        uploaded_files_metadata = []  # to store uploaded files information to keep in the database
-        
-        # Update progress to show initial state
-        self.progress.emit(processed_files, self.total_files)
-        
-        # Add safeguards to ensure valid indices
-        if self.current_file_index >= len(self.all_files):
-            self.log.emit(f"Warning: Current file index ({self.current_file_index}) out of range, resetting to 0")
-            self.current_file_index = 0
-        
-        # Process files from the current_file_index (for resuming)
-        for i in range(self.current_file_index, len(self.all_files)):
-            # Check for pause state
-            while self.is_paused():
-                # Wait during pause
-                time.sleep(0.5)
-                if not self._is_running:  # Check if cancelled during pause
-                    self.log.emit("Upload cancelled during pause")
+            # Upload files
+            for i in range(self.current_file_index, len(self.all_files)):
+                if not self._is_running:
+                    self.log.emit("Upload cancelled")
                     break
-            
-            if not self._is_running:
-                self.log.emit("Upload cancelled")
-                # Save state before exiting
-                self.save_state()
-                break
-            
-            # Save current file index for resume capability
-            self.current_file_index = i
-            
-            # Save state periodically (every 10 files)
-            if i % 10 == 0:
-                self.save_state()
-            
-            try:
-                file_info = self.all_files[i]
-                local_path = file_info['local_path']
-                s3_key = file_info['s3_key']
-                file_size = file_info['size']
+                    
+                if self.is_paused():
+                    self.log.emit("Upload paused")
+                    self.save_state()  # Save state before waiting
+                    
+                    while self.is_paused() and self._is_running:
+                        time.sleep(0.5)
+                    
+                    if not self._is_running:
+                        self.log.emit("Upload cancelled while paused")
+                        break
+                        
+                    self.log.emit("Upload resumed")
+                    
+                # Get current file
+                file_path = self.all_files[i]
                 
-                # Update progress - use index for file scanning, but add uploaded_file_count for actual uploads
-                # This way we can show both scanning progress and actual upload progress
-                if self.parent() and hasattr(self.parent(), 'toggle_progress_mode'):
-                    # If parent has a function to toggle between index and uploads, use that
-                    if uploaded_files > 0:
-                        # Once files start uploading, show upload count instead of index
-                        self.progress.emit(uploaded_files, self.total_files)
-                    else:
-                        # During initial scanning, show index
-                        self.progress.emit(i, self.total_files)
-                else:
-                    # Default behavior: show actual uploads
-                    self.progress.emit(uploaded_files, self.total_files)
-                
-                # Check if file already uploaded
-                if s3_key in self.completed_files:
-                    self.log.emit(f"Skipping previously uploaded file: {s3_key}")
-                    skipped_files += 1
-                    self.skipped_file_count = skipped_files
-                    continue
-                
-                # Verify file still exists
-                local_file_path = Path(local_path)
-                if not local_file_path.exists():
-                    self.log.emit(f"Warning: File doesn't exist, skipping: {local_path}")
-                    skipped_files += 1
-                    self.skipped_file_count = skipped_files
-                    continue
-                
-                # Upload the file to S3
                 try:
-                    self.log.emit(f"Uploading: {local_path} to {s3_key}")
+                    # Check if file exists
+                    if not os.path.isfile(file_path):
+                        self.log.emit(f"Skipping non-existent file: {file_path}")
+                        self.skipped_file_count += 1
+                        continue
+                        
+                    # Get file size
+                    file_size = os.path.getsize(file_path)
                     
-                    # Get file extension to determine content type
-                    file_ext = Path(local_path).suffix.lower()
-                    content_type = 'application/octet-stream'  # Default content type
+                    # Skip empty files
+                    if file_size == 0:
+                        self.log.emit(f"Skipping empty file: {file_path}")
+                        self.skipped_file_count += 1
+                        continue
                     
-                    # Set appropriate content type based on file extension
-                    if file_ext in ['.jpg', '.jpeg']:
-                        content_type = 'image/jpeg'
-                    elif file_ext == '.png':
-                        content_type = 'image/png'
-                    elif file_ext in ['.mp4', '.mov']:
-                        content_type = 'video/mp4'
-                    elif file_ext in ['.cr2', '.cr3', '.raw']:
-                        content_type = 'image/x-canon-cr2'
+                    # Process file based on its type and determine appropriate S3 path
+                    file_name = os.path.basename(file_path)
+                    self.log.emit(f"Processing file: {file_name}")
+                    
+                    # Determine file extension
+                    _, ext = os.path.splitext(file_name)
+                    ext = ext.lower()
+                    
+                    # Determine S3 object key based on file type
+                    relative_path = os.path.dirname(os.path.relpath(file_path, self.local_path or self.folder_path))
+                    
+                    # Replace backslashes with forward slashes for S3 paths
+                    relative_path = relative_path.replace('\\', '/')
+                    
+                    # Construct S3 path based on order number and date
+                    if relative_path and relative_path != '.':
+                        s3_key = f"orders/{date_str}/{self.order_number}/{relative_path}/{file_name}"
+                    else:
+                        s3_key = f"orders/{date_str}/{self.order_number}/{file_name}"
+                    
+                    # Normalize path
+                    s3_key = s3_key.replace('//', '/')
                     
                     # Upload file to S3
-                    s3.upload_file(
-                        Filename=local_path,
-                        Bucket=self.aws_session.bucket_name,
-                        Key=s3_key,
-                        ExtraArgs={
-                            'ContentType': content_type,
-                            'ACL': 'private'
-                        },
-                        Callback=lambda bytes_transferred: self.log.emit(f"Uploading {s3_key}: {bytes_transferred} bytes") if bytes_transferred % 10485760 == 0 else None
-                    )
+                    self.log.emit(f"Uploading to: {s3_key}")
                     
-                    # Update counters
-                    uploaded_files += 1
-                    self.uploaded_file_count = uploaded_files
+                    # Create a callback to track upload progress for this file
+                    # Create a callback to track upload progress
+                    def progress_callback(bytes_transferred):
+                        if not self._is_running:
+                            raise Exception("Upload cancelled")
                     
-                    # Add file to completed files list
+                    # Upload file to S3 with progress tracking
+                    with open(file_path, 'rb') as f:
+                        s3_client.upload_fileobj(
+                            f, 
+                            bucket_name, 
+                            s3_key,
+                            Callback=progress_callback
+                        )
+                    
+                    # Add file to completed list
                     self.completed_files.append(s3_key)
+                    self.uploaded_file_count += 1
                     
-                    # Store metadata for database
-                    uploaded_files_metadata.append({
-                        'order_number': self.order_number,
-                        's3_key': s3_key,
-                        'file_name': Path(local_path).name,
-                        'file_size': file_size,
-                        'file_type': content_type,
-                        'status': 'completed'
-                    })
+                    # Update current file index for state saving
+                    self.current_file_index = i + 1
                     
-                    self.log.emit(f"Uploaded: {s3_key}")
-                except Exception as upload_error:
-                    self.log.emit(f"Error uploading {s3_key}: {str(upload_error)}")
-                    skipped_files += 1
-                    self.skipped_file_count = skipped_files
-            except Exception as file_error:
-                self.log.emit(f"Error processing file at index {i}: {str(file_error)}")
-                skipped_files += 1
-                self.skipped_file_count = skipped_files
-                continue
-        
-        # Final update of counters
-        self.uploaded_file_count = uploaded_files
-        self.skipped_file_count = skipped_files
-        
-        if self._is_running:
-            # Record the upload in the database
-            try:
-                # Get database connection from parent
-                parent = self.parent()
-                if parent and hasattr(parent, 'db_manager'):
-                    db_manager = parent.db_manager
+                    # Emit progress update
+                    self.progress.emit(self.current_file_index, self.total_files)
                     
-                    # Convert photographer IDs to integers
-                    main_photographer_id = int(self.photographers['main']) if self.photographers['main'] else None
-                    assistant_photographer_id = int(self.photographers['assistant']) if self.photographers['assistant'] else None
-                    video_photographer_id = int(self.photographers['video']) if self.photographers['video'] else None
+                    # Save state periodically (every 5 files)
+                    if self.uploaded_file_count % 5 == 0:
+                        self.save_state()
                     
-                    # First check if there's already an upload record for this order
-                    existing_record = self.check_existing_upload(db_manager, self.order_number)
-                    
-                    if existing_record:
-                        # Update the existing record
-                        self.log.emit(f"Updating existing upload record for order {self.order_number}")
-                        success = self.update_upload_record(
-                            db_manager,
-                            existing_record,
-                            uploaded_files,
-                            main_photographer_id,
-                            assistant_photographer_id,
-                            video_photographer_id
-                        )
-                    else:
-                        # Create a new record
-                        self.log.emit(f"Creating new upload record for order {self.order_number}")
-                        success = db_manager.record_upload(
-                            self.order_number, 
-                            uploaded_files + skipped_files,  # Total files count
-                            main_photographer_id,
-                            assistant_photographer_id,
-                            video_photographer_id
-                        )
-                    
-                    # Record detailed file upload history
-                    if success and uploaded_files_metadata:
-                        success = self.record_upload_details(db_manager, uploaded_files_metadata)
+                except Exception as e:
+                    if not self._is_running:
+                        self.log.emit("Upload cancelled during file transfer")
+                        break
                         
-                    if success:
-                        self.log.emit(f"Upload recorded in database. {uploaded_files} files uploaded, {skipped_files} files skipped.")
-                    else:
-                        self.log.emit("Failed to record upload in database")
-                
-            except Exception as e:
-                self.log.emit(f"Error recording upload in database: {str(e)}")
-                import traceback
-                self.log.emit(traceback.format_exc())
+                    self.log.emit(f"Error uploading file {file_path}: {str(e)}")
+                    
+                    # Still update the index so we don't get stuck on a problematic file
+                    self.current_file_index = i + 1
+                    self.skipped_file_count += 1
             
-            if not self.is_paused():  # Only report completion if not paused
-                self.log.emit(f"Upload complete. {uploaded_files} files uploaded, {skipped_files} files skipped.")
-            else:
-                self.log.emit(f"Upload paused. {uploaded_files} files uploaded, {skipped_files} files skipped so far.")
-        
-        self.finished.emit()
-    
+            # Save final state
+            self.save_state()
+            
+            # Log completion
+            self.log.emit(f"Upload complete for order {self.order_number}")
+            self.log.emit(f"Uploaded {self.uploaded_file_count} files, skipped {self.skipped_file_count}")
+            
+            # Emit finished signal
+            self.finished.emit()
+            
+        except Exception as e:
+            self.log.emit(f"Error during upload: {str(e)}")
+            import traceback
+            self.log.emit(traceback.format_exc())
+            
+            # Try to save state before exiting
+            self.save_state()
+            
+            # Still emit finished to keep UI responsive
+            self.finished.emit()
+
     def get_uploaded_files(self, order_number):
         """
         Get list of already uploaded files for this order
@@ -1188,90 +1045,217 @@ class BackgroundUploader(QThread):
             return False
 
     def organize_files_by_extension(self):
-        """Organize files by extension into appropriate category folders"""
-        # Define extension mappings
-        extension_mappings = {
-            'CR2': ['.cr2', '.cr3', '.nef', '.arw', '.raw'],  # Raw image files
-            'JPG': ['.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp', '.gif', '.heic'],  # Image files
-            'Reels/Videos': ['.mp4', '.mov', '.avi', '.wmv', '.flv', '.m4v', '.mkv', '.webm'],  # Video files
-            'OTHER': []  # Default category for other types
-        }
+        """
+        Organize files by their extension
         
-        # Get all files in the source folder and its subfolders
-        # Convert Path to string if needed
-        folder_path = self.folder_path
-        if isinstance(folder_path, Path):
-            folder_path = Path(folder_path)
-        else:
-            folder_path = Path(str(folder_path))
+        Returns:
+            dict: Dictionary mapping file extensions to lists of files
+        """
+        file_extensions = {}
+        
+        for file_path in self.all_files:
+            _, ext = os.path.splitext(file_path)
+            ext = ext.lower()
             
-        total_moved = 0
-        self.log.emit(f"Scanning {folder_path} for files to organize...")
-        
-        # Create category folders if they don't exist
-        for category in extension_mappings.keys():
-            category_path = folder_path / category
-            if "/" in category:
-                # Handle nested folders like "Reels/Videos"
-                category_parts = category.split("/")
-                current_path = folder_path
-                for part in category_parts:
-                    current_path = current_path / part
-                    if not current_path.exists():
-                        current_path.mkdir(exist_ok=True)
+            if ext in file_extensions:
+                file_extensions[ext].append(file_path)
             else:
-                # Simple category folder
-                if not category_path.exists():
-                    category_path.mkdir(exist_ok=True)
+                file_extensions[ext] = [file_path]
+                
+        return file_extensions
+    
+    def scan_for_missing_files(self, db_manager=None):
+        """
+        Scan local files and compare with S3 to find files that need to be uploaded
         
-        # Find all files in the main folder and subfolders
-        all_files = []
-        for file_path in folder_path.rglob('*'):
-            if file_path.is_file():
-                # Skip files already in category folders
-                relative_path = file_path.relative_to(folder_path)
-                parts = relative_path.parts
-                if parts and parts[0] in extension_mappings:
-                    # File is already in a category folder, skip
-                    continue
-                all_files.append(file_path)
+        Args:
+            db_manager: Optional database manager for checking uploaded files
+            
+        Returns:
+            dict: Dictionary with scan results containing:
+                - total_files: Total number of local files
+                - uploaded_files: Number of files already in S3
+                - missing_files: Number of files not in S3
+                - missing_file_list: List of relative paths of missing files
+        """
+        self.log.emit(f"Scanning for missing files in order {self.order_number}")
         
-        self.log.emit(f"Found {len(all_files)} files to organize")
-        
-        # Move each file to appropriate folder based on extension
-        for file_path in all_files:
-            extension = file_path.suffix.lower()
+        try:
+            # Initialize result data
+            result = {
+                'total_files': 0,
+                'uploaded_files': 0,
+                'missing_files': 0,
+                'missing_file_list': [],
+                'has_partial_uploads': False
+            }
             
-            # Determine target category
-            target_category = 'OTHER'  # Default category
-            for category, extensions in extension_mappings.items():
-                if extension in extensions:
-                    target_category = category
-                    break
+            # Make sure we have a valid local path
+            base_path = self.local_path if self.local_path else self.folder_path
+            if not base_path or not os.path.exists(base_path):
+                self.log.emit(f"Error: Invalid folder path for scan: {base_path}")
+                return None
+                
+            # Get date parts for constructing S3 path
+            date_str = self._parse_order_date()
             
-            # Create target path
-            if "/" in target_category:
-                # Handle nested category like "Reels/Videos"
-                target_folder = folder_path
-                for part in target_category.split('/'):
-                    target_folder = target_folder / part
-            else:
-                target_folder = folder_path / target_category
+            # Get S3 client
+            if not self.aws_session:
+                self.log.emit("No AWS session available for S3 scan")
+                return None
+                
+            s3_client = self.aws_session.client('s3')
+            bucket_name = getattr(self.aws_session, 'bucket_name', "balistudiostorage")
             
-            # Create target filename
-            target_file = target_folder / file_path.name
+            # Build prefix for S3 paths based on order and date
+            s3_prefix = f"orders/{date_str}/{self.order_number}/"
             
-            # Check if target file already exists
-            if target_file.exists():
-                self.log.emit(f"Skipping {file_path.name} - already exists in {target_category}")
-                continue
+            # Scan local files
+            local_files = []
+            local_file_sizes = {}
+            
+            for root, _, files in os.walk(base_path):
+                for file in files:
+                    # Skip hidden and temporary files
+                    if file.startswith('.') or file.endswith('.tmp') or file.endswith('.crdownload'):
+                        continue
+                        
+                    file_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(file_path, base_path)
+                    # Normalize to forward slashes for comparison with S3
+                    rel_path = rel_path.replace('\\', '/')
+                    
+                    try:
+                        file_size = os.path.getsize(file_path)
+                        local_files.append(rel_path)
+                        local_file_sizes[rel_path] = file_size
+                    except OSError:
+                        self.log.emit(f"Warning: Could not access file: {file_path}")
+            
+            self.log.emit(f"Found {len(local_files)} local files in {base_path}")
+            
+            # Check for files in S3
+            s3_files = []
+            s3_file_sizes = {}
             
             try:
-                # Move the file
-                shutil.move(str(file_path), str(target_file))
-                self.log.emit(f"Moved {file_path.name} to {target_category} folder")
-                total_moved += 1
+                # Use pagination to handle large directories
+                paginator = s3_client.get_paginator('list_objects_v2')
+                pages = paginator.paginate(Bucket=bucket_name, Prefix=s3_prefix)
+                
+                for page in pages:
+                    if 'Contents' in page:
+                        for obj in page['Contents']:
+                            # Get the key and remove the prefix to get the relative path
+                            key = obj['Key']
+                            if key.startswith(s3_prefix):
+                                rel_key = key[len(s3_prefix):]
+                                s3_files.append(rel_key)
+                                s3_file_sizes[rel_key] = obj['Size']
+                
+                self.log.emit(f"Found {len(s3_files)} files already uploaded to S3 in {s3_prefix}")
             except Exception as e:
-                self.log.emit(f"Error moving {file_path.name}: {str(e)}")
+                self.log.emit(f"Error listing S3 objects: {str(e)}")
+                # If we can't get S3 files, we'll assume all files need to be uploaded
+                s3_files = []
+            
+            # Find missing files (files in local directory but not in S3)
+            missing_files = []
+            size_mismatch_files = []
+            
+            for file in local_files:
+                if file not in s3_files:
+                    missing_files.append(file)
+                elif local_file_sizes.get(file, 0) != s3_file_sizes.get(file, -1):
+                    # Size mismatch means the file might be partially uploaded
+                    size_mismatch_files.append(file)
+            
+            # Combine missing and size mismatched files as both need to be uploaded
+            all_missing_files = missing_files + size_mismatch_files
+            
+            # Update the result dictionary
+            result['total_files'] = len(local_files)
+            result['uploaded_files'] = len(s3_files)
+            result['missing_files'] = len(all_missing_files)
+            result['missing_file_list'] = all_missing_files
+            result['has_partial_uploads'] = len(size_mismatch_files) > 0
+            
+            # Log some examples of missing files for debugging
+            if all_missing_files:
+                examples = all_missing_files[:5]
+                self.log.emit("Examples of missing files:")
+                for example in examples:
+                    self.log.emit(f" - {example}")
+                
+                if len(all_missing_files) > 5:
+                    self.log.emit(f" - And {len(all_missing_files) - 5} more...")
+            
+            return result
+            
+        except Exception as e:
+            self.log.emit(f"Error scanning for missing files: {str(e)}")
+            import traceback
+            self.log.emit(traceback.format_exc())
+            return None
+    
+    def _parse_order_date(self):
+        """
+        Parse the order date into a string format suitable for S3 paths
         
-        self.log.emit(f"File organization complete: moved {total_moved} files to appropriate folders")
+        Returns:
+            str: Date string in the format "YYYY/MM-YYYY/DD-MM-YYYY"
+        """
+        try:
+            # Handle different date formats
+            if hasattr(self.order_date, 'toPyDate'):
+                # It's a QDate
+                try:
+                    py_date = self.order_date.toPyDate()
+                    if py_date and py_date.year > 0:
+                        year = py_date.year
+                        month = f"{py_date.month:02d}-{year}"
+                        day = f"{py_date.day:02d}-{month}"
+                        return f"{year}/{month}/{day}"
+                except Exception as e:
+                    self.log.emit(f"Error converting QDate: {str(e)}")
+            
+            elif isinstance(self.order_date, datetime):
+                # It's a datetime object
+                year = self.order_date.year
+                month = f"{self.order_date.month:02d}-{year}"
+                day = f"{self.order_date.day:02d}-{month}"
+                return f"{year}/{month}/{day}"
+            
+            elif isinstance(self.order_date, str):
+                # Try to parse string date in various formats
+                try:
+                    # Try ISO format first
+                    date_obj = datetime.fromisoformat(self.order_date.replace('Z', '+00:00'))
+                    year = date_obj.year
+                    month = f"{date_obj.month:02d}-{year}"
+                    day = f"{date_obj.day:02d}-{month}"
+                    return f"{year}/{month}/{day}"
+                except ValueError:
+                    # Try common date formats
+                    for fmt in ['%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y', '%Y/%m/%d']:
+                        try:
+                            date_obj = datetime.strptime(self.order_date, fmt)
+                            year = date_obj.year
+                            month = f"{date_obj.month:02d}-{year}"
+                            day = f"{date_obj.day:02d}-{month}"
+                            return f"{year}/{month}/{day}"
+                        except ValueError:
+                            continue
+            
+            # If we get here, we couldn't parse the date
+            self.log.emit(f"Could not parse order date: {self.order_date}, using current date")
+            
+        except Exception as e:
+            self.log.emit(f"Error parsing order date: {str(e)}")
+        
+        # Default to current date if all parsing fails
+        now = datetime.now()
+        year = now.year
+        month = f"{now.month:02d}-{year}"
+        day = f"{now.day:02d}-{month}"
+        return f"{year}/{month}/{day}"
