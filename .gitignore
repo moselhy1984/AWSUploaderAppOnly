@@ -38,4 +38,6 @@ Thumbs.db
 # Large binary files
 *.pkl
 *.h5
-*.weights 
+*.weights # Encryption and security files
+config.enc
+encryption_key.txt
