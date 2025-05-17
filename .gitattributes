@@ -1,0 +1,10 @@
+# Set default behavior to automatically normalize line endings
+* text=auto
+
+# Explicitly declare text files to ensure they use LF
+*.py text eol=lf
+*.sh text eol=lf
+
+# Batch scripts should maintain CRLF line endings
+*.bat text eol=crlf
+*.cmd text eol=crlf
