@@ -1,0 +1,7 @@
+*.pyc
+*.pyo
+__pycache__/
+aws_app_env/
+fresh_env/
+.venv/
+*.so
