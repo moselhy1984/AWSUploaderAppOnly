@@ -37,6 +37,15 @@ class BackgroundUploader(QThread):
     def stop(self):
         """Stop the upload process"""
         self._is_running = False
+        self.wait()  # Wait for the thread to finish
+
+    def __del__(self):
+        """Cleanup when the object is destroyed"""
+        try:
+            if self.isRunning():
+                self.stop()
+        except:
+            pass
 
     def run(self):
         """Main method that runs in the background thread"""

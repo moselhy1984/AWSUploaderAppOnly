@@ -54,9 +54,12 @@ class S3UploaderGUI(QMainWindow):
         # List to track multiple upload tasks
         self.upload_tasks = []
         
-        self.init_ui()  # تغيير لاستخدام snake_case
+        self.init_ui()
         self.uploader = None
         self.setup_tray()
+        
+        # Load pending tasks from database
+        self.load_pending_tasks()
     
     def init_ui(self):  # تغيير لاستخدام snake_case
         """Initialize the user interface"""
@@ -506,55 +509,91 @@ class S3UploaderGUI(QMainWindow):
         """Add a new upload task to the list"""
         if not self.validate_inputs():
             return
-        
-        # Create a unique task ID
-        task_id = len(self.upload_tasks) + 1
-        
-        # Create a task item for the list
-        task_item = QListWidgetItem()
-        task_item.setText(f"Task {task_id}: Order {self.order_number.text()} - Pending")
-        task_item.setData(Qt.UserRole, {
-            'id': task_id,
-            'order_number': self.order_number.text(),
-            'order_date': self.order_date.date().toPyDate(),
-            'folder_path': self.folder_path.text(),
-            'photographers': self.photographers.copy(),
-            'status': 'pending',
-            'progress': 0,
-            'local_path': self.current_order_path
-        })
-        
-        # Add to the list widget
-        self.task_list.addItem(task_item)
-        
-        # Store the task data
-        self.upload_tasks.append({
-            'id': task_id,
-            'item': task_item,
-            'order_number': self.order_number.text(),
-            'order_date': self.order_date.date().toPyDate(),
-            'folder_path': self.folder_path.text(),
-            'photographers': self.photographers.copy(),
-            'uploader': None,
-            'status': 'pending',
-            'progress': 0,
-            'local_path': self.current_order_path
-        })
-        
-        # Enable the start all button if we have tasks
-        self.start_all_btn.setEnabled(len(self.upload_tasks) > 0)
-        
-        # Clear the form for the next task
-        self.folder_path.clear()
-        self.order_number.clear()
-        self.photographer_info.clear()
-        self.photographers = {
-            'main': None,
-            'assistant': None, 
-            'video': None
-        }
-        
-        self.log_message(f"Added upload task {task_id} for order {self.order_number.text()}")
+            
+        try:
+            # Create task record in database first
+            task_data = {
+                'order_number': self.order_number.text(),
+                'order_date': self.order_date.date().toPyDate(),
+                'folder_path': str(self.folder_path.text()),  # Convert to string
+                'main_photographer_id': int(self.photographers['main']) if self.photographers['main'] else None,
+                'assistant_photographer_id': int(self.photographers['assistant']) if self.photographers['assistant'] else None,
+                'video_photographer_id': int(self.photographers['video']) if self.photographers['video'] else None,
+                'status': 'pending',
+                'progress': 0,
+                'local_path': str(self.current_order_path) if self.current_order_path else ''  # Convert to string
+            }
+            
+            # Insert into upload_tasks table
+            cursor = self.db_manager.connection.cursor()
+            insert_query = """
+            INSERT INTO upload_tasks (
+                order_number, order_date, folder_path, main_photographer_id,
+                assistant_photographer_id, video_photographer_id, status,
+                progress, local_path, created_by, created_by_emp_id
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            """
+            cursor.execute(insert_query, (
+                task_data['order_number'],
+                task_data['order_date'],
+                task_data['folder_path'],
+                task_data['main_photographer_id'],
+                task_data['assistant_photographer_id'],
+                task_data['video_photographer_id'],
+                task_data['status'],
+                task_data['progress'],
+                task_data['local_path'],
+                self.user_info.get('username', 'system'),
+                self.user_info.get('emp_id')
+            ))
+            task_id = cursor.lastrowid
+            self.db_manager.connection.commit()
+            cursor.close()
+            
+            # Create a task item for the list
+            task_item = QListWidgetItem()
+            task_item.setText(f"Task {task_id}: Order {task_data['order_number']} - Pending")
+            task_item.setData(Qt.UserRole, {
+                'id': task_id,
+                **task_data
+            })
+            
+            # Add to the list widget
+            self.task_list.addItem(task_item)
+            
+            # Store the task data
+            self.upload_tasks.append({
+                'id': task_id,
+                'item': task_item,
+                **task_data,
+                'uploader': None
+            })
+            
+            # Enable the start all button if we have tasks
+            self.start_all_btn.setEnabled(len(self.upload_tasks) > 0)
+            
+            # Clear the form for the next task
+            self.folder_path.clear()
+            self.order_number.clear()
+            self.photographer_info.clear()
+            self.photographers = {
+                'main': None,
+                'assistant': None, 
+                'video': None
+            }
+            
+            self.log_message(f"Added upload task {task_id} for order {task_data['order_number']}")
+            
+            # Start the task automatically if no other tasks are running
+            if not any(task['status'] == 'running' for task in self.upload_tasks):
+                self.start_task(self.upload_tasks[-1])
+                
+        except Exception as e:
+            self.log_message(f"Error creating task: {str(e)}")
+            import traceback
+            self.log_message(traceback.format_exc())
     
     def start_all_tasks(self):
         """Start all pending upload tasks"""
@@ -576,41 +615,69 @@ class S3UploaderGUI(QMainWindow):
         Args:
             task (dict): Task information
         """
-        # First, organize files into their respective folders before uploading
-        source_folder = task['folder_path']
-        if source_folder:
-            self.organize_files(source_folder, task['local_path'])
-        
-        # Create a new uploader for this task
-        uploader = BackgroundUploader(
-            folder_path=task['folder_path'],
-            order_number=task['order_number'],
-            order_date=task['order_date'],
-            aws_session=self.aws_session,
-            photographers=task['photographers'],
-            local_path=task['local_path'],
-            parent=self
-        )
-        
-        # Connect signals with task-specific handlers
-        uploader.progress.connect(lambda current, total, task_id=task['id']: 
-                                 self.update_task_progress(task_id, current, total))
-        uploader.log.connect(lambda message, task_id=task['id']: 
-                            self.log_task_message(task_id, message))
-        uploader.finished.connect(lambda task_id=task['id']: 
-                                 self.task_finished(task_id))
-        
-        # Update task status
-        task['uploader'] = uploader
-        task['status'] = 'running'
-        
-        # Update the list item
-        task['item'].setText(f"Task {task['id']}: Order {task['order_number']} - Running (0%)")
-        
-        # Start the uploader
-        uploader.start()
-        
-        self.log_message(f"Started upload task {task['id']} for order {task['order_number']}")
+        try:
+            # Update task status in database
+            cursor = self.db_manager.connection.cursor()
+            update_query = """
+            UPDATE upload_tasks 
+            SET status = 'running',
+                last_action_by = %s,
+                last_action_by_emp_id = %s,
+                last_action_time = NOW()
+            WHERE task_id = %s
+            """
+            cursor.execute(update_query, (
+                self.user_info.get('username', 'system'),
+                self.user_info.get('emp_id'),
+                task['id']
+            ))
+            self.db_manager.connection.commit()
+            cursor.close()
+            
+            # First, organize files into their respective folders before uploading
+            source_folder = task['folder_path']
+            if source_folder:
+                self.organize_files(source_folder, task['local_path'])
+            
+            # Create a new uploader for this task
+            uploader = BackgroundUploader(
+                folder_path=task['folder_path'],
+                order_number=task['order_number'],
+                order_date=task['order_date'],
+                aws_session=self.aws_session,
+                photographers={
+                    'main': task['main_photographer_id'],
+                    'assistant': task['assistant_photographer_id'],
+                    'video': task['video_photographer_id']
+                },
+                local_path=task['local_path'],
+                parent=self
+            )
+            
+            # Connect signals with task-specific handlers
+            uploader.progress.connect(lambda current, total, task_id=task['id']: 
+                                    self.update_task_progress(task_id, current, total))
+            uploader.log.connect(lambda message, task_id=task['id']: 
+                                self.log_task_message(task_id, message))
+            uploader.finished.connect(lambda task_id=task['id']: 
+                                    self.task_finished(task_id))
+            
+            # Update task status
+            task['uploader'] = uploader
+            task['status'] = 'running'
+            
+            # Update the list item
+            task['item'].setText(f"Task {task['id']}: Order {task['order_number']} - Running (0%)")
+            
+            # Start the uploader
+            uploader.start()
+            
+            self.log_message(f"Started upload task {task['id']} for order {task['order_number']}")
+            
+        except Exception as e:
+            self.log_message(f"Error starting task: {str(e)}")
+            import traceback
+            self.log_message(traceback.format_exc())
     
     def update_task_progress(self, task_id, current, total):
         """
@@ -656,24 +723,57 @@ class S3UploaderGUI(QMainWindow):
         Args:
             task_id (int): Finished task ID
         """
-        # Find the task
-        task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
-        if not task:
-            return
-        
-        # Update task status
-        task['status'] = 'completed'
-        task['progress'] = 100
-        
-        # Update the list item
-        task['item'].setText(f"Task {task['id']}: Order {task['order_number']} - Completed")
-        
-        # Check if all tasks are completed
-        if all(t['status'] in ['completed', 'cancelled'] for t in self.upload_tasks):
-            self.all_tasks_finished()
-        
-        # Refresh the upload history
-        self.load_upload_history()
+        try:
+            # Find the task
+            task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
+            if not task:
+                return
+            
+            # Update task status in database
+            cursor = self.db_manager.connection.cursor()
+            update_query = """
+            UPDATE upload_tasks 
+            SET status = 'completed',
+                progress = 100,
+                completed_timestamp = NOW(),
+                last_action_by = %s,
+                last_action_by_emp_id = %s,
+                last_action_time = NOW()
+            WHERE task_id = %s
+            """
+            cursor.execute(update_query, (
+                self.user_info.get('username', 'system'),
+                self.user_info.get('emp_id'),
+                task_id
+            ))
+            self.db_manager.connection.commit()
+            cursor.close()
+            
+            # Update task status
+            task['status'] = 'completed'
+            task['progress'] = 100
+            
+            # Update the list item
+            task['item'].setText(f"Task {task['id']}: Order {task['order_number']} - Completed")
+            
+            # Find the next pending task
+            pending_tasks = [t for t in self.upload_tasks if t['status'] == 'pending']
+            if pending_tasks:
+                # Sort by task ID to ensure oldest tasks are processed first
+                next_task = min(pending_tasks, key=lambda x: x['id'])
+                self.start_task(next_task)
+            
+            # Check if all tasks are completed
+            if all(t['status'] in ['completed', 'cancelled'] for t in self.upload_tasks):
+                self.all_tasks_finished()
+            
+            # Refresh the upload history
+            self.load_upload_history()
+            
+        except Exception as e:
+            self.log_message(f"Error finishing task: {str(e)}")
+            import traceback
+            self.log_message(traceback.format_exc())
     
     def all_tasks_finished(self):
         """Handle completion of all tasks"""
@@ -1000,11 +1100,25 @@ class S3UploaderGUI(QMainWindow):
 
     def quit_app(self):
         """Properly exit the application"""
-        if self.uploader:
-            self.uploader.stop()
-        self.db_manager.close()
-        QApplication.quit()
-    
+        try:
+            # Stop all running uploaders
+            for task in self.upload_tasks:
+                if task['status'] == 'running' and task['uploader']:
+                    task['uploader'].stop()
+                    task['uploader'].wait()  # Wait for the thread to finish
+            
+            # Close database connection
+            if hasattr(self, 'db_manager'):
+                self.db_manager.close()
+            
+            # Quit the application
+            QApplication.quit()
+        except Exception as e:
+            self.log_message(f"Error during application shutdown: {str(e)}")
+            import traceback
+            self.log_message(traceback.format_exc())
+            QApplication.quit()
+
     def closeEvent(self, event):
         """
         Handle window close event
@@ -1012,18 +1126,89 @@ class S3UploaderGUI(QMainWindow):
         Args:
             event (QCloseEvent): Close event
         """
-        if self.uploader and self.uploader.isRunning():
-            reply = QMessageBox.question(
-                self, 'Exit',
-                'Upload is in progress. Are you sure you want to quit?',
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
-            
-            if reply == QMessageBox.Yes:
-                self.quit_app()
-            else:
-                event.ignore()
-                return
+        try:
+            # Check if any uploads are in progress
+            running_tasks = [t for t in self.upload_tasks if t['status'] == 'running']
+            if running_tasks:
+                reply = QMessageBox.question(
+                    self, 'Exit',
+                    f'There are {len(running_tasks)} uploads in progress. Are you sure you want to quit?',
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
                 
-        event.accept()
+                if reply == QMessageBox.Yes:
+                    self.quit_app()
+                else:
+                    event.ignore()
+                    return
+            
+            # If no uploads are running, just quit
+            self.quit_app()
+            event.accept()
+            
+        except Exception as e:
+            self.log_message(f"Error during window close: {str(e)}")
+            import traceback
+            self.log_message(traceback.format_exc())
+            event.accept()
+
+    def load_pending_tasks(self):
+        """Load pending tasks from database when application starts"""
+        try:
+            cursor = self.db_manager.connection.cursor(dictionary=True)
+            query = """
+            SELECT * FROM upload_tasks 
+            WHERE status IN ('pending', 'running')
+            ORDER BY task_id ASC
+            """
+            cursor.execute(query)
+            tasks = cursor.fetchall()
+            cursor.close()
+            
+            for task in tasks:
+                # Create a task item for the list
+                task_item = QListWidgetItem()
+                task_item.setText(f"Task {task['task_id']}: Order {task['order_number']} - {task['status'].title()}")
+                
+                # Convert paths to Path objects for internal use
+                task_data = {
+                    'id': task['task_id'],
+                    'order_number': task['order_number'],
+                    'order_date': task['order_date'],
+                    'folder_path': task['folder_path'],
+                    'main_photographer_id': task['main_photographer_id'],
+                    'assistant_photographer_id': task['assistant_photographer_id'],
+                    'video_photographer_id': task['video_photographer_id'],
+                    'status': task['status'],
+                    'progress': task['progress'],
+                    'local_path': task['local_path']
+                }
+                
+                task_item.setData(Qt.UserRole, task_data)
+                
+                # Add to the list widget
+                self.task_list.addItem(task_item)
+                
+                # Store the task data
+                self.upload_tasks.append({
+                    'id': task['task_id'],
+                    'item': task_item,
+                    **task_data,
+                    'uploader': None
+                })
+            
+            # Enable the start all button if we have tasks
+            self.start_all_btn.setEnabled(len(self.upload_tasks) > 0)
+            
+            # Start the oldest pending task if no tasks are running
+            if not any(task['status'] == 'running' for task in self.upload_tasks):
+                pending_tasks = [t for t in self.upload_tasks if t['status'] == 'pending']
+                if pending_tasks:
+                    oldest_task = min(pending_tasks, key=lambda x: x['id'])
+                    self.start_task(oldest_task)
+            
+        except Exception as e:
+            self.log_message(f"Error loading pending tasks: {str(e)}")
+            import traceback
+            self.log_message(traceback.format_exc())
