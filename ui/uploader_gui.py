@@ -183,16 +183,16 @@ class S3UploaderGUI(QMainWindow):
         self.upload_btn = QPushButton('Add Upload Task')
         self.upload_btn.clicked.connect(self.add_upload_task)
         
-        self.start_all_btn = QPushButton('Start All Tasks')
-        self.start_all_btn.clicked.connect(self.start_all_tasks)
-        self.start_all_btn.setEnabled(False)
+        self.retry_all_btn = QPushButton('Retry All Tasks')
+        self.retry_all_btn.clicked.connect(self.retry_all_tasks)
+        self.retry_all_btn.setEnabled(False)
         
         self.cancel_btn = QPushButton('Cancel Selected')
         self.cancel_btn.clicked.connect(self.cancel_selected_task)
         self.cancel_btn.setEnabled(False)
         
         button_layout.addWidget(self.upload_btn)
-        button_layout.addWidget(self.start_all_btn)
+        button_layout.addWidget(self.retry_all_btn)
         button_layout.addWidget(self.cancel_btn)
         
         upload_layout.addWidget(self.progress_bar)
@@ -318,7 +318,7 @@ class S3UploaderGUI(QMainWindow):
             
         # Check if the user wants to enter a manual order number instead
         manual_entry = QMessageBox.question(
-            self, 
+                self, 
             "Manual Entry", 
             f"There are {len(orders)} orders for {selected_date}. Do you want to select from existing orders or enter a new order number manually?",
             QMessageBox.Yes | QMessageBox.No,
@@ -374,8 +374,8 @@ class S3UploaderGUI(QMainWindow):
             
             if photographer_text:
                 self.photographer_info.setText(", ".join(photographer_text))
-            else:
-                self.photographer_info.setText("")
+        else:
+            self.photographer_info.setText("")
     
     def create_local_folders(self, order_number):
         """
@@ -571,8 +571,8 @@ class S3UploaderGUI(QMainWindow):
                 'uploader': None
             })
             
-            # Enable the start all button if we have tasks
-            self.start_all_btn.setEnabled(len(self.upload_tasks) > 0)
+            # Enable the retry all button if we have tasks
+            self.retry_all_btn.setEnabled(len(self.upload_tasks) > 0)
             
             # Clear the form for the next task
             self.folder_path.clear()
@@ -586,35 +586,120 @@ class S3UploaderGUI(QMainWindow):
             
             self.log_message(f"Added upload task {task_id} for order {task_data['order_number']}")
             
-            # Start the task automatically if no other tasks are running
-            if not any(task['status'] == 'running' for task in self.upload_tasks):
-                self.start_task(self.upload_tasks[-1])
+            # Start the task immediately
+            self.start_task(self.upload_tasks[-1])
                 
         except Exception as e:
             self.log_message(f"Error creating task: {str(e)}")
             import traceback
             self.log_message(traceback.format_exc())
     
-    def start_all_tasks(self):
-        """Start all pending upload tasks"""
-        pending_tasks = [task for task in self.upload_tasks if task['status'] == 'pending']
-        
-        if not pending_tasks:
-            QMessageBox.information(self, "Information", "No pending tasks to start")
-            return
-        
-        for task in pending_tasks:
-            self.start_task(task)
-        
-        self.cancel_btn.setEnabled(True)
+    def retry_all_tasks(self):
+        """Retry all tasks to ensure complete upload"""
+        try:
+            # Get all tasks from database
+            cursor = self.db_manager.connection.cursor(dictionary=True)
+            query = """
+            SELECT * FROM upload_tasks 
+            WHERE (
+                status != 'completed' 
+                OR (
+                    status = 'completed' 
+                    AND DATE(completed_timestamp) > CURRENT_DATE()
+                )
+            )
+            ORDER BY task_id ASC
+            """
+            cursor.execute(query)
+            tasks = cursor.fetchall()
+            cursor.close()
+            
+            for task in tasks:
+                # Reset task status in database
+                cursor = self.db_manager.connection.cursor()
+                update_query = """
+                UPDATE upload_tasks 
+                SET status = 'pending',
+                    progress = 0,
+                    last_action_by = %s,
+                    last_action_by_emp_id = %s,
+                    last_action_time = NOW()
+                WHERE task_id = %s
+                """
+                cursor.execute(update_query, (
+                    self.user_info.get('username', 'system'),
+                    self.user_info.get('emp_id'),
+                    task['task_id']
+                ))
+                self.db_manager.connection.commit()
+                cursor.close()
+                
+                # Create task item if it doesn't exist
+                task_item = next((t['item'] for t in self.upload_tasks if t['id'] == task['task_id']), None)
+                if not task_item:
+                    task_item = QListWidgetItem()
+                    task_item.setText(f"Task {task['task_id']}: Order {task['order_number']} - Pending")
+                    task_item.setData(Qt.UserRole, {
+                        'id': task['task_id'],
+                        'order_number': task['order_number'],
+                        'order_date': task['order_date'],
+                        'folder_path': task['folder_path'],
+                        'main_photographer_id': task['main_photographer_id'],
+                        'assistant_photographer_id': task['assistant_photographer_id'],
+                        'video_photographer_id': task['video_photographer_id'],
+                        'status': 'pending',
+                        'progress': 0,
+                        'local_path': task['local_path']
+                    })
+                    self.task_list.addItem(task_item)
+                    
+                    # Add to upload tasks list
+                    self.upload_tasks.append({
+                        'id': task['task_id'],
+                        'item': task_item,
+                        'order_number': task['order_number'],
+                        'order_date': task['order_date'],
+                        'folder_path': task['folder_path'],
+                        'main_photographer_id': task['main_photographer_id'],
+                        'assistant_photographer_id': task['assistant_photographer_id'],
+                        'video_photographer_id': task['video_photographer_id'],
+                        'status': 'pending',
+                        'progress': 0,
+                        'local_path': task['local_path'],
+                        'uploader': None
+                    })
+                else:
+                    # Update existing task
+                    task_item.setText(f"Task {task['task_id']}: Order {task['order_number']} - Pending")
+                    task_data = task_item.data(Qt.UserRole)
+                    task_data['status'] = 'pending'
+                    task_data['progress'] = 0
+                    task_item.setData(Qt.UserRole, task_data)
+                    
+                    # Update in upload tasks list
+                    task_obj = next((t for t in self.upload_tasks if t['id'] == task['task_id']), None)
+                    if task_obj:
+                        task_obj['status'] = 'pending'
+                        task_obj['progress'] = 0
+                        if task_obj['uploader']:
+                            task_obj['uploader'].stop()
+                            task_obj['uploader'] = None
+            
+            # Start the oldest pending task
+            pending_tasks = [t for t in self.upload_tasks if t['status'] == 'pending']
+            if pending_tasks:
+                oldest_task = min(pending_tasks, key=lambda x: x['id'])
+                self.start_task(oldest_task)
+            
+            self.log_message("Retrying all tasks...")
+                    
+        except Exception as e:
+            self.log_message(f"Error retrying tasks: {str(e)}")
+            import traceback
+            self.log_message(traceback.format_exc())
     
     def start_task(self, task):
-        """
-        Start a specific upload task
-        
-        Args:
-            task (dict): Task information
-        """
+        """Start a specific upload task"""
         try:
             # Update task status in database
             cursor = self.db_manager.connection.cursor()
@@ -656,11 +741,11 @@ class S3UploaderGUI(QMainWindow):
             
             # Connect signals with task-specific handlers
             uploader.progress.connect(lambda current, total, task_id=task['id']: 
-                                    self.update_task_progress(task_id, current, total))
+                    self.update_task_progress(task_id, current, total))
             uploader.log.connect(lambda message, task_id=task['id']: 
-                                self.log_task_message(task_id, message))
+                    self.log_task_message(task_id, message))
             uploader.finished.connect(lambda task_id=task['id']: 
-                                    self.task_finished(task_id))
+                    self.task_finished(task_id))
             
             # Update task status
             task['uploader'] = uploader
@@ -717,12 +802,7 @@ class S3UploaderGUI(QMainWindow):
         self.log_message(f"Task {task_id}: {message}")
     
     def task_finished(self, task_id):
-        """
-        Handle completion of a specific task
-        
-        Args:
-            task_id (int): Finished task ID
-        """
+        """Handle completion of a specific task"""
         try:
             # Find the task
             task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
@@ -787,7 +867,7 @@ class S3UploaderGUI(QMainWindow):
             QSystemTrayIcon.Information,
             2000
         )
-    
+
     def cancel_selected_task(self):
         """Cancel the selected upload task"""
         selected_items = self.task_list.selectedItems()
@@ -819,7 +899,7 @@ class S3UploaderGUI(QMainWindow):
         # Check if all tasks are now completed or cancelled
         if all(t['status'] in ['completed', 'cancelled'] for t in self.upload_tasks):
             self.cancel_btn.setEnabled(False)
-    
+            
     def start_upload(self):
         """Legacy method for backward compatibility"""
         self.add_upload_task()
@@ -843,7 +923,7 @@ class S3UploaderGUI(QMainWindow):
             if not order_path or not Path(order_path).exists():
                 self.log_message("Error: Order folder structure not found")
                 return
-            
+                
             source_path = Path(source_folder)
             files_organized = 0
             
@@ -896,7 +976,7 @@ class S3UploaderGUI(QMainWindow):
             self.log_message(f"Error during file organization: {str(e)}")
             import traceback
             self.log_message(traceback.format_exc())
-    
+
     def update_progress(self, current, total):
         """
         Update progress bar
@@ -936,7 +1016,7 @@ class S3UploaderGUI(QMainWindow):
         if not uploads:
             self.history_list.addItem("No uploads found for today")
             return
-        
+            
         for upload in uploads:
             # Format display with photographer info if available
             photographer_info = []
@@ -953,7 +1033,7 @@ class S3UploaderGUI(QMainWindow):
             if photographer_text:
                 item_text += f" - {photographer_text}"
                 
-            item = QListWidgetItem(item_text)
+                item = QListWidgetItem(item_text)
             item.setData(Qt.UserRole, upload['order_number'])
             self.history_list.addItem(item)
     
@@ -972,7 +1052,7 @@ class S3UploaderGUI(QMainWindow):
         if not details:
             self.upload_details.setText("No details available")
             return
-        
+                
         # Format the details nicely
         html = f"""
         <h3>Order {details['order']['order_number']}</h3>
@@ -1030,7 +1110,7 @@ class S3UploaderGUI(QMainWindow):
             
             # Check if upload_files table exists
             check_query = """
-            SELECT COUNT(*) as table_exists 
+            SELECT COUNT(*) as table_exists
             FROM information_schema.TABLES 
             WHERE TABLE_SCHEMA = %s 
             AND TABLE_NAME = 'upload_files'
@@ -1069,7 +1149,7 @@ class S3UploaderGUI(QMainWindow):
             else:
                 # Check if we need to add preview columns
                 check_column_query = """
-                SELECT COUNT(*) as column_exists 
+            SELECT COUNT(*) as column_exists
                 FROM information_schema.COLUMNS 
                 WHERE TABLE_SCHEMA = %s 
                 AND TABLE_NAME = 'upload_files' 
@@ -1088,8 +1168,8 @@ class S3UploaderGUI(QMainWindow):
                     """
                     cursor.execute(add_columns_query)
                     
-                    self.db_manager.connection.commit()
-                    self.log_message("Added preview columns successfully")
+                self.db_manager.connection.commit()
+                self.log_message("Added preview columns successfully")
             
             cursor.close()
             
@@ -1120,21 +1200,16 @@ class S3UploaderGUI(QMainWindow):
             QApplication.quit()
 
     def closeEvent(self, event):
-        """
-        Handle window close event
-        
-        Args:
-            event (QCloseEvent): Close event
-        """
+        """Handle window close event"""
         try:
             # Check if any uploads are in progress
             running_tasks = [t for t in self.upload_tasks if t['status'] == 'running']
             if running_tasks:
                 reply = QMessageBox.question(
-                    self, 'Exit',
-                    f'There are {len(running_tasks)} uploads in progress. Are you sure you want to quit?',
+                        self, 'Exit',
+                        f'There are {len(running_tasks)} uploads in progress. Are you sure you want to quit?',
                     QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No
+                        QMessageBox.No
                 )
                 
                 if reply == QMessageBox.Yes:
@@ -1154,22 +1229,54 @@ class S3UploaderGUI(QMainWindow):
             event.accept()
 
     def load_pending_tasks(self):
-        """Load pending tasks from database when application starts"""
+        """Load tasks based on the new filtering logic:
+        - All incomplete tasks (pending, running, failed) regardless of date
+        - Only today's completed tasks
+        """
         try:
             cursor = self.db_manager.connection.cursor(dictionary=True)
+            
+            # Get today's date for filtering completed tasks
+            today = datetime.now().date()
+            
+            # Query to get:
+            # 1. All incomplete tasks (pending, running, failed) regardless of date
+            # 2. Only today's completed tasks
             query = """
             SELECT * FROM upload_tasks 
-            WHERE status IN ('pending', 'running')
-            ORDER BY task_id ASC
+            WHERE (
+                status != 'completed' 
+                OR (
+                    status = 'completed' 
+                    AND DATE(completed_timestamp) > CURRENT_DATE()
+                )
+            )
+            ORDER BY 
+                CASE 
+                    WHEN status IN ('pending', 'running', 'failed') THEN 0 
+                    ELSE 1 
+                END,
+                task_id ASC
             """
             cursor.execute(query)
             tasks = cursor.fetchall()
             cursor.close()
             
+            # Clear existing tasks from the list
+            self.task_list.clear()
+            self.upload_tasks.clear()
+            
             for task in tasks:
                 # Create a task item for the list
                 task_item = QListWidgetItem()
-                task_item.setText(f"Task {task['task_id']}: Order {task['order_number']} - {task['status'].title()}")
+                
+                # Format the status text with date for completed tasks
+                status_text = task['status'].title()
+                if task['status'] == 'completed':
+                    completed_date = task['completed_timestamp'].date()
+                    status_text = f"Completed ({completed_date})"
+                
+                task_item.setText(f"Task {task['task_id']}: Order {task['order_number']} - {status_text}")
                 
                 # Convert paths to Path objects for internal use
                 task_data = {
@@ -1198,8 +1305,8 @@ class S3UploaderGUI(QMainWindow):
                     'uploader': None
                 })
             
-            # Enable the start all button if we have tasks
-            self.start_all_btn.setEnabled(len(self.upload_tasks) > 0)
+            # Enable the retry all button if we have tasks
+            self.retry_all_btn.setEnabled(len(self.upload_tasks) > 0)
             
             # Start the oldest pending task if no tasks are running
             if not any(task['status'] == 'running' for task in self.upload_tasks):
@@ -1208,7 +1315,12 @@ class S3UploaderGUI(QMainWindow):
                     oldest_task = min(pending_tasks, key=lambda x: x['id'])
                     self.start_task(oldest_task)
             
+            # Log the number of tasks loaded
+            incomplete_count = sum(1 for t in tasks if t['status'] in ('pending', 'running', 'failed'))
+            completed_count = sum(1 for t in tasks if t['status'] == 'completed')
+            self.log_message(f"Loaded {len(tasks)} tasks: {incomplete_count} incomplete, {completed_count} completed today")
+            
         except Exception as e:
-            self.log_message(f"Error loading pending tasks: {str(e)}")
+            self.log_message(f"Error loading tasks: {str(e)}")
             import traceback
             self.log_message(traceback.format_exc())
