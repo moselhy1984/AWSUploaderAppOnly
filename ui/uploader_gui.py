@@ -3734,15 +3734,6 @@ class S3UploaderGUI(QMainWindow):
     def init_aws_session(self):
         """Initialize AWS session with credentials from config"""
         try:
-            # Si estamos en modo seguro, crear automáticamente una sesión simulada
-            if self.safe_mode:
-                self.log_message("Running in safe mode - creating mock AWS session without attempting AWS connection")
-                self.aws_session = type('MockSession', (), {
-                    'client': lambda *args, **kwargs: None,
-                    'bucket_name': self.aws_config.get('AWS_S3_BUCKET', 'mock-bucket')
-                })
-                return
-                
             # Use boto3 to create a session
             import boto3
             import os
@@ -3793,10 +3784,6 @@ class S3UploaderGUI(QMainWindow):
                 except Exception as default_error:
                     self.log_message(f"Error using default credentials: {str(default_error)}")
                     self.aws_session = None
-                    # Create an empty mock session for testing purposes
-                    if self.safe_mode:
-                        self.log_message("Creating mock AWS session for safe mode")
-                        self.aws_session = type('MockSession', (), {'client': lambda *args, **kwargs: None})
         except Exception as e:
             self.log_message(f"Error initializing AWS session: {str(e)}")
             import traceback

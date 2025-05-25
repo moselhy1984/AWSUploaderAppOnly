@@ -38,17 +38,9 @@ if [ -f "$CRASH_TIME_FILE" ]; then
     fi
 fi
 
-# إذا انهار التطبيق 3 مرات متتالية، تشغيل في الوضع الآمن
-if [ $CRASH_COUNT -ge 3 ]; then
-    echo "تم اكتشاف انهيارات متكررة. تشغيل التطبيق في الوضع الآمن."
-    export SAFE_MODE=1
-    # تعطيل التشغيل التلقائي للمهام 
-    export AUTO_RESUME=0
-else
-    # تعطيل استئناف المهام تلقائياً وتسجيل الدخول التلقائي
-    export AUTO_RESUME=0
-    export NO_AUTO_LOGIN=1
-fi
+# تعطيل استئناف المهام تلقائياً وتسجيل الدخول التلقائي
+export AUTO_RESUME=0
+export NO_AUTO_LOGIN=1
 
 # حفظ وقت التشغيل الحالي
 echo "$CURRENT_TIME" > "$HOME/.aws_uploader/last_run.txt"
@@ -64,11 +56,6 @@ if [ $EXIT_CODE -ne 0 ]; then
     echo $CRASH_COUNT > "$CRASH_COUNT_FILE"
     echo "$CURRENT_TIME" > "$CRASH_TIME_FILE"
     echo "انهيار التطبيق برمز الخروج: $EXIT_CODE"
-    
-    if [ $CRASH_COUNT -ge 3 ]; then
-        echo "تحذير: انهار التطبيق $CRASH_COUNT مرات متتالية."
-        echo "سيتم تشغيل التطبيق في الوضع الآمن في المرة القادمة."
-    fi
 else
     # إعادة ضبط عداد الانهيارات في حالة الخروج الطبيعي
     echo "0" > "$CRASH_COUNT_FILE"
