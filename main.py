@@ -88,9 +88,10 @@ def main():
         if os.environ.get('USE_MEMORY_MANAGER', '0') == '1':
             try:
                 print("Initializing memory manager...")
-                from memory_manager import setup_memory_management
-                memory_manager = setup_memory_management(app)
-                print("Memory manager initialized")
+                # from memory_manager import setup_memory_management
+                # memory_manager = setup_memory_management(app)
+                # print("Memory manager initialized")
+                pass
             except ImportError:
                 print("Memory manager module not found, continuing without memory optimization")
             except Exception as mem_err:
