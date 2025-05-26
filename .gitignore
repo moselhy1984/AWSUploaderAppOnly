@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDE/editor settings
+.idea/
+.vscode/
+*.swp
+
+# Encryption/config files (each user should generate their own)
+config.enc
+encryption_key.txt
+
+# OS-specific
+*.bak
+*.tmp
+
+# Logs
+*.log
+
+# Others
+*.egg-info/ 
