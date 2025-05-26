@@ -745,7 +745,12 @@ class BackgroundUploader(QThread):
                 
                 # Check if file already uploaded
                 if s3_key in self.completed_files:
-                    self.log.emit(f"Skipping previously uploaded file: {s3_key}")
+                    # Ignore system files
+                    if Path(s3_key).name == '.DS_Store':
+                        skipped_files += 1
+                        self.skipped_file_count = skipped_files
+                        continue
+                    self.log.emit(f"تم تخطي {Path(s3_key).name} (مرفوع سابقًا)")
                     skipped_files += 1
                     self.skipped_file_count = skipped_files
                     continue
@@ -760,7 +765,15 @@ class BackgroundUploader(QThread):
                 
                 # Upload the file to S3
                 try:
-                    self.log.emit(f"Uploading: {local_path} to {s3_key}")
+                    # Ignore system files
+                    if Path(local_path).name == '.DS_Store':
+                        uploaded_files += 1
+                        self.uploaded_file_count = uploaded_files
+                        continue
+                    self.log.emit(f"جارٍ رفع {Path(local_path).name} ({i+1}/{self.total_files})")
+                    
+                    percent = int((i+1)/self.total_files*100) if self.total_files else 100
+                    self.log.emit(f"{Path(local_path).name} ({percent}%) - uploading")
                     
                     # Get file extension to determine content type
                     file_ext = Path(local_path).suffix.lower()
@@ -805,9 +818,9 @@ class BackgroundUploader(QThread):
                         'status': 'completed'
                     })
                     
-                    self.log.emit(f"Uploaded: {s3_key}")
+                    self.log.emit(f"تم رفع {Path(s3_key).name} ({i+1}/{self.total_files})")
                 except Exception as upload_error:
-                    self.log.emit(f"Error uploading {s3_key}: {str(upload_error)}")
+                    self.log.emit(f"{Path(s3_key).name} - error: {str(upload_error)}")
                     skipped_files += 1
                     self.skipped_file_count = skipped_files
             except Exception as file_error:

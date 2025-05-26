@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (QMainWindow, QPushButton, QVBoxLayout,
                             QTextEdit, QFileDialog, QFrame, QMessageBox, QSystemTrayIcon,
                             QMenu, QDialog, QDateEdit, QComboBox, QListWidget, QListWidgetItem,
                             QTabWidget, QScrollArea, QGridLayout, QTextBrowser, QApplication,
-                            QTableWidget, QTableWidgetItem, QHeaderView)
+                            QTableWidget, QTableWidgetItem, QHeaderView, QSpacerItem, QSizePolicy)
 from PyQt5.QtCore import Qt, QThread, QSettings, QDate, QTimer
 from PyQt5.QtGui import QIcon
 
@@ -180,7 +180,7 @@ class S3UploaderGUI(QMainWindow):
     def init_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle('Secure File Uploader')
-        self.setGeometry(100, 100, 900, 700)
+        self.setGeometry(100, 100, 800, 450)
         
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -242,33 +242,18 @@ class S3UploaderGUI(QMainWindow):
         upload_photoshoot_frame.setLayout(upload_photoshoot_layout)
         upload_layout.addWidget(upload_photoshoot_frame)
         
-        # Add today's uploads section
-        today_uploads_frame = QFrame()
-        today_uploads_layout = QVBoxLayout()
-        
-        today_uploads_label = QLabel("Today's Uploads:")
-        today_uploads_label.setStyleSheet("font-weight: bold;")
-        today_uploads_layout.addWidget(today_uploads_label)
-        
-        self.today_uploads_list = QListWidget()
-        self.today_uploads_list.setMaximumHeight(120)  # Limit height
-        today_uploads_layout.addWidget(self.today_uploads_list)
-        
-        refresh_today_btn = QPushButton('Refresh Today\'s Uploads')
-        refresh_today_btn.clicked.connect(self.refresh_todays_uploads)
-        today_uploads_layout.addWidget(refresh_today_btn)
-        
-        today_uploads_frame.setLayout(today_uploads_layout)
-        upload_layout.addWidget(today_uploads_frame)
-        
         # Task list for multiple uploads
         task_list_label = QLabel("Upload Tasks:")
+        task_list_label.setStyleSheet("font-weight: bold; font-size: 12pt;")
         upload_layout.addWidget(task_list_label)
         
         self.task_list = QListWidget()
-        self.task_list.setMinimumHeight(150)
+        self.task_list.setMinimumHeight(200)  # توازن أفضل بين القوائم
         self.task_list.itemSelectionChanged.connect(self.on_task_selected)
         upload_layout.addWidget(self.task_list)
+        
+        # إضافة مسافة رأسية بين قائمة المهام وقائمة اللوج
+        upload_layout.addSpacerItem(QSpacerItem(20, 10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         
         # Progress bar and buttons
         self.progress_bar = QProgressBar()
@@ -283,47 +268,45 @@ class S3UploaderGUI(QMainWindow):
         self.modify_task_btn.clicked.connect(self.modify_selected_task)
         self.modify_task_btn.setEnabled(False)
         
-        self.start_all_btn = QPushButton('Start All Tasks')
-        self.start_all_btn.clicked.connect(self.start_all_tasks)
-        self.start_all_btn.setEnabled(False)
+        button_layout.addWidget(self.modify_task_btn)
         
-        # Buttons for pause, resume, restart
-        self.pause_btn = QPushButton('Pause Task')
+        self.pause_btn = QPushButton('Pause')
         self.pause_btn.clicked.connect(self.pause_selected_task)
         self.pause_btn.setEnabled(False)
+        button_layout.addWidget(self.pause_btn)
         
-        self.resume_btn = QPushButton('Resume Task')
+        self.resume_btn = QPushButton('Resume')
         self.resume_btn.clicked.connect(self.resume_selected_task)
         self.resume_btn.setEnabled(False)
+        button_layout.addWidget(self.resume_btn)
         
-        self.restart_btn = QPushButton('Restart Task')
+        self.restart_btn = QPushButton('Restart')
         self.restart_btn.clicked.connect(self.restart_selected_task)
         self.restart_btn.setEnabled(False)
+        button_layout.addWidget(self.restart_btn)
         
-        self.cancel_btn = QPushButton('Cancel Selected')
+        self.cancel_btn = QPushButton('Cancel')
         self.cancel_btn.clicked.connect(self.cancel_selected_task)
         self.cancel_btn.setEnabled(False)
+        button_layout.addWidget(self.cancel_btn)
         
-        # Add delete button
-        self.delete_btn = QPushButton('Delete Task')
+        self.delete_btn = QPushButton('Delete')
         self.delete_btn.clicked.connect(self.delete_selected_task)
         self.delete_btn.setEnabled(False)
-        
-        # Add buttons in logical order
-        button_layout.addWidget(self.modify_task_btn)
-        button_layout.addWidget(self.start_all_btn)
-        button_layout.addWidget(self.pause_btn)
-        button_layout.addWidget(self.resume_btn)
-        button_layout.addWidget(self.restart_btn)
-        button_layout.addWidget(self.cancel_btn)
         button_layout.addWidget(self.delete_btn)
         
-        upload_layout.addWidget(self.progress_bar)
         upload_layout.addLayout(button_layout)
+        upload_layout.addWidget(self.progress_bar)
         
-        # Log area
+        # Log area with smaller height
+        log_label = QLabel("Log:")
+        log_label.setStyleSheet("font-weight: bold;")
+        upload_layout.addWidget(log_label)
+        
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
+        self.log_text.setMinimumHeight(140)
+        self.log_text.setMaximumHeight(160)
         upload_layout.addWidget(self.log_text)
         
         upload_tab.setLayout(upload_layout)
@@ -883,20 +866,28 @@ class S3UploaderGUI(QMainWindow):
         self.tray_icon.show()
     
     def log_message(self, message):
-        """Add a timestamped message to the log area"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # Store the message in a console log for debugging
-        print(f"[{timestamp}] {message}")
-        
-        # Safely append to log_text if it exists
+        """Show only file upload/skipped and error messages in the log area, newest on top"""
+        # فلترة الرسائل
+        msg_lower = message.lower()
+        show = (
+            'uploaded' in msg_lower or
+            'uploading' in msg_lower or
+            'skipped' in msg_lower or
+            'error' in msg_lower
+        )
+        if not show:
+            return
+        print(message)
         if hasattr(self, 'log_text') and self.log_text is not None:
-            self.log_text.append(f"[{timestamp}] {message}")
+            current = self.log_text.toPlainText()
+            if current:
+                self.log_text.setPlainText(f"{message}\n" + current)
+            else:
+                self.log_text.setPlainText(message)
         else:
-            # If log_text doesn't exist yet, store message in a queue to be displayed later
             if not hasattr(self, '_pending_log_messages'):
                 self._pending_log_messages = []
-            self._pending_log_messages.append(f"[{timestamp}] {message}")
+            self._pending_log_messages.insert(0, message)
     
     def browse_local_storage(self):
         """Browse for local storage location"""
@@ -1095,7 +1086,7 @@ class S3UploaderGUI(QMainWindow):
             self.restart_btn.setEnabled(True)  # Enable restart for pending tasks
     
     def start_all_tasks(self):
-        """Start all pending upload tasks"""
+        """Start all pending upload tasks sequentially"""
         # لا نحتاج للتحقق من تسجيل الدخول
         # تم إزالة الشرط الذي يتحقق من تسجيل الدخول
             
@@ -1105,8 +1096,9 @@ class S3UploaderGUI(QMainWindow):
             QMessageBox.information(self, "Information", "No pending tasks to start")
             return
         
-        for task in pending_tasks:
-            self.start_task(task)
+        # Start only the first pending task
+        if pending_tasks:
+            self.start_task(pending_tasks[0])
         
         self.cancel_btn.setEnabled(True)
     
@@ -1489,6 +1481,12 @@ class S3UploaderGUI(QMainWindow):
         
         # Enable restart button for completed tasks
         self.restart_btn.setEnabled(True)
+        
+        # Find and start the next pending task
+        pending_tasks = [t for t in self.upload_tasks if t['status'] == 'pending']
+        if pending_tasks:
+            self.log_message(f"Starting next pending task for order {pending_tasks[0]['order_number']}")
+            self.start_task(pending_tasks[0])
         
         # Check if all tasks are completed
         if all(t['status'] in ['completed', 'cancelled'] for t in self.upload_tasks):
@@ -1955,6 +1953,9 @@ class S3UploaderGUI(QMainWindow):
                     "assistant_photographer_id = %s",
                     "video_photographer_id = %s"
                 ]
+                # إذا كانت المهمة مكتملة، حدث completed_timestamp
+                if task.get('status') == 'completed':
+                    update_fields.append("completed_timestamp = NOW()")
                 
                 # Add task_state_path and last_state_update if they exist
                 if task_state_path_exists:
@@ -2205,243 +2206,71 @@ class S3UploaderGUI(QMainWindow):
             return None
     
     def load_tasks_from_database(self):
-        """
-        Load saved tasks from database and state files
-        """
+        """Load tasks from database"""
+        if not self.db_manager or not self.db_manager.connection:
+            return
+            
         try:
-            # If skip_state_load is enabled, don't load saved tasks
-            if self.skip_state_load:
-                self.log_message("Skipping loading previous tasks and saved states")
-                return
+            with self.db_manager.connection.cursor(dictionary=True) as cursor:
+                # Get today's date
+                today = datetime.now().date()
                 
-            if not self.db_manager.connection or not self.db_manager.connection.is_connected():
-                self.db_manager.connect()
-            
-            self.log_message("Searching for saved tasks...")
-
-            # Load tasks from database if load_all_tasks is enabled
-            if hasattr(self, 'load_all_tasks') and self.load_all_tasks:
-                self.log_message("Loading ALL incomplete tasks from database...")
-                try:
-                    # Find the correct primary key for the upload_tasks table
-                    cursor = self.db_manager.connection.cursor(dictionary=True)
-                    
-                    # Check for task_id or id column
-                    cursor.execute("""
-                    SELECT COLUMN_NAME 
-                    FROM information_schema.COLUMNS 
-                    WHERE TABLE_SCHEMA = %s 
-                    AND TABLE_NAME = 'upload_tasks' 
-                    AND COLUMN_NAME IN ('task_id', 'id')
-                    """, (self.db_manager.rds_config['database'],))
-                    
-                    id_columns = [row['COLUMN_NAME'] for row in cursor.fetchall()]
-                    
-                    if not id_columns:
-                        self.log_message("Error: Could not find ID column in upload_tasks table")
-                        cursor.close()
-                    else:
-                        # Use the first ID column found (prioritize task_id if both exist)
-                        id_column = 'task_id' if 'task_id' in id_columns else id_columns[0]
-                        self.log_message(f"Using database column '{id_column}' for task identification")
-                        
-                        # Query the database for incomplete tasks
-                        query = f"""
-                        SELECT {id_column} as task_id, order_number, folder_path, local_path, 
-                               status, progress, created_at, order_date, 
-                               main_photographer_id, assistant_photographer_id, video_photographer_id
-                        FROM upload_tasks 
-                        WHERE status != 'completed' AND status != 'cancelled'
-                        """
-                        
-                        # Execute the query
-                        cursor.execute(query)
-                        
-                        # Process the results
-                        results = cursor.fetchall()
-                        self.log_message(f"Found {len(results)} incomplete tasks in database")
-                        
-                        for db_task in results:
-                            # Access data using dictionary keys
-                            order_number = db_task['order_number']
-                            folder_path = db_task.get('folder_path', '')
-                            local_path = db_task.get('local_path', folder_path) or folder_path
-                            task_status = db_task.get('status', 'paused')
-                            progress = db_task.get('progress', 0)
-                            
-                            # Skip tasks that are already in the list
-                            if any(t['order_number'] == order_number for t in self.upload_tasks):
-                                self.log_message(f"Task for order {order_number} already exists, skipping")
-                                continue
-                            
-                            # Check if the folder path exists
-                            path_exists = os.path.exists(folder_path) if folder_path else False
-                            if not path_exists and os.path.exists(local_path):
-                                path_exists = True
-                                folder_path = local_path
-                            
-                            if not path_exists:
-                                self.log_message(f"Warning: Path does not exist for order {order_number}: {folder_path}")
-                            
-                            # Create a task object
-                            task_id = len(self.upload_tasks) + 1
-                            task = {
-                                'id': task_id,
-                                'order_number': order_number,
-                                'folder_path': folder_path,
-                                'local_path': local_path or folder_path,
-                                'status': task_status,
-                                'progress': progress,
-                                'uploader': None,
-                                'photographers': {
-                                    'main': db_task.get('main_photographer_id'),
-                                    'assistant': db_task.get('assistant_photographer_id'),
-                                    'video': db_task.get('video_photographer_id')
-                                },
-                                'order_date': self._parse_safe_date(db_task.get('order_date')),
-                                'path_exists': path_exists,
-                                'db_task_id': db_task['task_id']
-                            }
-                            
-                            # Add task to list and update UI
-                            self.upload_tasks.append(task)
-                            self.update_task_list(task)
-                            self.log_message(f"Added task for order {order_number} from database (status: {task_status})")
-                            
-                        cursor.close()
-                except Exception as e:
-                    self.log_message(f"Error loading tasks from database: {str(e)}")
-                    import traceback
-                    self.log_message(traceback.format_exc())
-            
-            # First, scan for any state files that might indicate interrupted uploads
-            state_dir = Path.home() / '.aws_uploader'
-            if state_dir.exists():
-                self.log_message(f"Searching for state files in: {state_dir}")
-                state_files = list(state_dir.glob("task_state_*.json"))
-                if state_files:
-                    self.log_message(f"Found {len(state_files)} saved state files")
-                    
-                    for state_file in state_files:
-                        try:
-                            # Check if file has one of our error extensions
-                            if any(state_file.name.endswith(ext) for ext in ['.corrupted', '.error', '.invalid', '.bak']):
-                                self.log_message(f"Ignoring suspicious state file: {state_file.name}")
-                                continue
-                            
-                            # Validate the state file
-                            state = self.validate_state_file(state_file)
-                            if not state:
-                                self.log_message(f"Ignoring corrupted state file: {state_file.name}")
-                                continue
-                                
-                            # Parse order number from filename (task_state_135547.json -> 135547)
-                            try:
-                                order_number = state_file.stem.split('_')[-1]
-                                
-                                # Additional validation on order_number
-                                if not order_number or not order_number.isdigit():
-                                    self.log_message(f"Invalid order number in filename: {state_file.name}")
-                                    continue
-                                
-                                # Skip if we already have this order in our tasks
-                                if any(t['order_number'] == order_number for t in self.upload_tasks):
-                                    self.log_message(f"Task for order {order_number} already loaded, skipping state file")
-                                    continue
-                                
-                                self.log_message(f"Loading state for order number: {order_number}")
-                            except (IndexError, ValueError) as e:
-                                self.log_message(f"Error parsing order number from filename {state_file.name}: {str(e)}")
-                                continue
-                            
-                            # Check for required fields in state file
-                            required_fields = ['order_number', 'folder_path']
-                            missing_fields = [field for field in required_fields if field not in state]
-                            
-                            if missing_fields:
-                                self.log_message(f"State file missing essential fields: {', '.join(missing_fields)}")
-                                continue
-                            
-                            # Make sure values are the correct type to prevent crashes
-                            if not isinstance(state.get('order_number'), str):
-                                self.log_message(f"Order number type incorrect (required: text): {type(state.get('order_number'))}")
-                                state['order_number'] = str(state.get('order_number', order_number))
-                                
-                            # Get last saved timestamp for debugging
-                            last_saved = state.get('last_saved', 'Unknown')
-                            self.log_message(f"Last state update: {last_saved}")
-                            
-                            # Set safe default values for progress tracking
-                            total_files = max(1, state.get('total_files', 1))
-                            current_file_index = min(max(0, state.get('current_file_index', 0)), total_files)
-                            
-                            # Calculate safe progress percentage
-                            if total_files <= 0:
-                                progress = 0
-                            else:
-                                progress = (current_file_index / total_files) * 100
-                                
-                            # Convert folder paths to strings if they're Path objects
-                            folder_path = str(state.get('folder_path', '')) if state.get('folder_path') else ''
-                            local_path = str(state.get('local_path', folder_path)) if state.get('local_path') else folder_path
-                            
-                            # Create a task from the saved state
-                            task_id = len(self.upload_tasks) + 1
-                            task = {
-                                'id': task_id,
-                                'order_number': state.get('order_number', order_number),
-                                'folder_path': folder_path,
-                                'local_path': local_path,
-                                'status': 'paused',  # Always start as paused for safety
-                                'progress': progress,
-                                'uploader': None,  # Will be initialized when resumed
-                                'photographers': state.get('photographers', {}),
-                                # Handle date conversion safely
-                                'order_date': self._parse_safe_date(state.get('order_date')) 
-                            }
-                            
-                            # Check if files are valid
-                            file_path = task.get('folder_path', '')
-                            if file_path and not os.path.exists(file_path):
-                                self.log_message(f"Warning: files path does not exist: {file_path}")
-                                # Don't auto-prompt for all files, just log the warning for now
-                                task['path_exists'] = False
-                            else:
-                                task['path_exists'] = True
-                        
-                            # Add task to list and update UI
-                            self.upload_tasks.append(task)
-                            self.update_task_list(task)
-                            self.log_message(f"Restored paused task for order {order_number} from state file")
-                            
-                            # Auto-resume task if the application was not properly closed last time
-                            # Use safer timer approach to avoid UI freezes
-                            if hasattr(self, '_auto_resume') and self._auto_resume and task['status'] == 'paused':
-                                self.log_message(f"Auto-resuming task {order_number} after abnormal shutdown")
-                                # Use a timer to start the task after UI is fully loaded
-                                # Add random delay to avoid starting all tasks simultaneously
-                                import random
-                                delay = 5000 + (random.randint(0, 10) * 1000)  # 5-15 seconds
-                                QTimer.singleShot(delay, lambda task_id=task['id']: self.auto_resume_task(task_id))
-                                    
-                        except Exception as e:
-                            self.log_message(f"Error loading state file {state_file.name}: {str(e)}")
-                            import traceback
-                            self.log_message(traceback.format_exc())
-            else:
-                self.log_message("No saved state files found")
-                if not state_dir.exists():
-                    self.log_message(f"State save directory doesn't exist, creating: {state_dir}")
-                    state_dir.mkdir(exist_ok=True)
+                # Query for incomplete tasks and completed tasks in the last 24 hours
+                query = """
+                SELECT task_id, order_number, status, progress, 
+                       created_at, completed_timestamp, folder_path, local_path,
+                       main_photographer_id, assistant_photographer_id, video_photographer_id,
+                       order_date
+                FROM upload_tasks 
+                WHERE status != 'completed' 
+                   OR (status = 'completed' AND completed_timestamp >= NOW() - INTERVAL 1 DAY)
+                ORDER BY 
+                    CASE 
+                        WHEN status = 'running' THEN 1
+                        WHEN status = 'paused' THEN 2
+                        WHEN status = 'pending' THEN 3
+                        WHEN status = 'completed' THEN 4
+                        ELSE 5
+                    END,
+                    created_at DESC
+                """
                 
-            # If auto_resume flag is enabled, start all paused tasks automatically
-            if self.auto_resume:
-                self.log_message("AUTO_RESUME is enabled, resuming all paused tasks automatically...")
-                # Use a timer to avoid UI freezing
-                QTimer.singleShot(3000, self.auto_resume_all_tasks)
-            
+                # Execute query
+                cursor.execute(query)
+                results = cursor.fetchall()
+                
+                for db_task in results:
+                    # Skip tasks that are already in the list
+                    if any(t['order_number'] == db_task['order_number'] for t in self.upload_tasks):
+                        continue
+                    
+                    # Create task object
+                    task_id = len(self.upload_tasks) + 1
+                    task = {
+                        'id': task_id,
+                        'order_number': db_task['order_number'],
+                        'folder_path': db_task.get('folder_path', ''),
+                        'local_path': db_task.get('local_path', db_task.get('folder_path', '')),
+                        'status': db_task.get('status', 'pending'),
+                        'progress': db_task.get('progress', 0),
+                        'uploader': None,
+                        'photographers': {
+                            'main': db_task.get('main_photographer_id'),
+                            'assistant': db_task.get('assistant_photographer_id'),
+                            'video': db_task.get('video_photographer_id')
+                        },
+                        'order_date': self._parse_safe_date(db_task.get('order_date')),
+                        'db_id': db_task['task_id']
+                    }
+                    
+                    # Add task to list and update UI
+                    self.upload_tasks.append(task)
+                    self.update_task_list(task)
+                    
+                cursor.close()
+                
         except Exception as e:
-            self.log_message(f"Error loading tasks: {str(e)}")
+            self.log_message(f"Error loading tasks from database: {str(e)}")
             import traceback
             self.log_message(traceback.format_exc())
 
