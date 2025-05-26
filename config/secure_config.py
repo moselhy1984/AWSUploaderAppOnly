@@ -97,9 +97,9 @@ class SecureConfigManager:
             for k, v in config.items():
                 if k not in sum(mapping.values(), []):
                     normalized_config[k] = v
-            # Make MAC check optional - will be handled by database check now
+            # Make MAC check mandatory - prevent decryption if not matching
             if 'authorized_mac' in config and config['authorized_mac'].lower() != self.mac_address.lower():
-                print(f"Warning: MAC address mismatch. Config: {config['authorized_mac']}, Current: {self.mac_address}")
+                raise ValueError(f"MAC address mismatch. Config: {config['authorized_mac']}, Current: {self.mac_address}. This configuration is only valid for the authorized device.")
             return normalized_config
         except Exception as e:
             raise ValueError(f"Configuration error: {str(e)}")
