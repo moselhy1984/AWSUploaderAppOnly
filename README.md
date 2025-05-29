@@ -1,131 +1,121 @@
-# تطبيق رفع الملفات إلى AWS S3
+# AWS File Uploader Application
 
-تطبيق بسيط ومتكامل لرفع الملفات من الجلسات التصويرية المختلفة إلى خدمة Amazon S3 لتخزين الملفات.
+A secure, device-bound file upload application for AWS S3 with MySQL database integration.
 
-### 🚀 أفضل نسخة حتى الآن
+## Features
 
-- تعمل بكامل المميزات المطلوبة.
-- تم إلغاء نظام المحاكاة (Safe Mode) نهائياً.
-- الاتصال مع AWS يتم بشكل حقيقي وآمن من خلال ملفات التشفير فقط.
-- لا يتم سؤال المستخدم عن بيانات AWS، بل يتم فك تشفيرها تلقائياً من الملفات.
-- جميع العمليات (رفع الملفات، استئناف المهام، إدارة المهام) تعمل بشكل متكامل مع قاعدة بيانات AWS RDS وS3.
-- تم معالجة جميع المشاكل السابقة المتعلقة بظهور مهام قديمة من ملفات محلية، وأصبح مصدر المهام الوحيد هو قاعدة البيانات أو المهام الجديدة التي ينشئها المستخدم.
+- Secure file uploads to AWS S3
+- Device-specific encryption and binding
+- MySQL database integration
+- Cross-platform support (Windows, macOS, Linux)
+- Modern PyQt5-based GUI
+- Task management with device-specific filtering
 
-## المميزات الرئيسية
+## Prerequisites
 
-- واجهة مستخدم سهلة الاستخدام
-- دعم استئناف المهام المتوقفة تلقائيًا
-- إدارة جلسات التصوير وتنظيمها
-- تتبع المهام وحالتها
-- سجل للأنشطة والعمليات
-- خيار تشغيل آمن (Safe Mode) للاختبار
-- تكامل مع قاعدة بيانات لحفظ المعلومات
+- Python 3.8 or higher
+- MySQL Server
+- AWS Account with S3 access
+- Virtual environment (recommended)
 
-## متطلبات التشغيل
+## Installation
 
-- Python 3.8 أو أحدث
-- البيئة الافتراضية مع المكتبات المطلوبة (موجودة في ملف requirements.txt)
-- اتصال بالإنترنت للرفع إلى AWS S3
-- حساب Amazon Web Services مع مفاتيح الوصول المناسبة
-
-## طريقة التشغيل
-
-1. قم بتشغيل ملف run_aws.sh:
-   ```
-   chmod +x run_aws.sh
-   ./run_aws.sh
-   ```
-
-2. سيقوم التطبيق بالتالي:
-   - تهيئة البيئة الافتراضية
-   - تحميل الإعدادات
-   - استرجاع المهام المتوقفة إن وجدت
-   - فتح الواجهة الرئيسية
-
-3. يمكنك استخدام الواجهة لإضافة مهام تحميل جديدة أو إدارة المهام الموجودة
-
-## تنظيف المشروع
-
-إذا كنت ترغب في تنظيف المشروع من الملفات غير الضرورية، يمكنك استخدام السكريبت المرفق:
-```
-chmod +x cleanup.sh
-./cleanup.sh
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd AWSUploaderAppOnly
 ```
 
-## حالة المشروع
+2. Create and activate a virtual environment:
+```bash
+# Windows
+python -m venv venv
+venv\Scripts\activate
 
-تم إصلاح المشاكل الرئيسية التالية:
-1. مشكلة تحويل QDate إلى قاعدة البيانات MySQL
-2. مشكلة تنسيق التاريخ في المسارات
+# macOS/Linux
+python3 -m venv venv
+source venv/bin/activate
+```
 
-الآن يمكن للتطبيق أن يعمل بشكل سلس مع حفظ البيانات بشكل صحيح.
-
-## الملفات الرئيسية
-
-- `main.py`: نقطة الدخول الرئيسية للتطبيق
-- `ui/uploader_gui.py`: واجهة المستخدم الرئيسية
-- `utils/background_uploader.py`: خادم الرفع في الخلفية
-- `database/db_manager.py`: إدارة قاعدة البيانات
-- `config/secure_config.py`: إدارة الإعدادات الآمنة
-- `run_aws.sh`: سكريبت تشغيل التطبيق
-
-# AWSUploaderAppOnly
-
-## دليل الاستخدام والتشغيل على أي جهاز
-
-### 1. متطلبات التشغيل
-- Python 3.8 أو أحدث
-- تثبيت الحزم المطلوبة:
-  - PyQt5
-  - cryptography
-  - boto3
-  - getmac
-  - mysql-connector-python
-  - pyperclip (لأداة إنشاء ملفات التشفير)
-
-> يمكنك تثبيت جميع الحزم عبر:
+3. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
-أو تثبيتها يدويًا:
+
+## Device-Specific Setup
+
+1. Run the configuration tool:
 ```bash
-pip install PyQt5 cryptography boto3 getmac mysql-connector-python pyperclip
+python Create_ConfigKey.py
 ```
 
-### 2. ملفات يجب تجاهلها وعدم نقلها بين الأجهزة
-- ملفات البيئة الافتراضية: `venv/`, `.venv/`
-- ملفات النظام: `.DS_Store`, `Thumbs.db`
-- ملفات الترجمة المؤقتة: `__pycache__/`, `*.pyc`
-- ملفات التشفير الخاصة بجهازك: `config.enc`, `encryption_key.txt`
-- إعدادات المحرر: `.idea/`, `.vscode/`
+2. Enter your AWS credentials and MySQL database details
+3. The tool will generate device-specific encryption files
+4. DO NOT share these files between devices
 
-> تم تجهيز ملف `.gitignore` ليقوم بذلك تلقائيًا.
+## Database Setup
 
-### 3. إنشاء ملفات التشفير لكل جهاز
-- استخدم أداة `Create_ConfigKey.py` لإنشاء ملفات التشفير (`config.enc` و`encryption_key.txt`) الخاصة بكل جهاز.
-- يجب إدخال الماك أدريس الصحيح للجهاز المستهدف.
-- لا يمكن تشغيل التطبيق على جهاز آخر إلا إذا كان الماك مطابقًا لما هو مخزن في ملف التشفير.
+1. Create the required tables:
+```sql
+CREATE TABLE devices (
+    DeviceID INT AUTO_INCREMENT PRIMARY KEY,
+    MAC_Address VARCHAR(17) UNIQUE,
+    DeviceName VARCHAR(100),
+    CreatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
-### 4. تشغيل التطبيق
-- فعّل البيئة الافتراضية (إن وجدت):
-  - على Windows:
-    ```
-    venv\Scripts\activate
-    ```
-  - على macOS/Linux:
-    ```
-    source venv/bin/activate
-    ```
-- شغّل التطبيق:
+CREATE TABLE upload_tasks (
+    TaskID INT AUTO_INCREMENT PRIMARY KEY,
+    FileName VARCHAR(255),
+    FilePath VARCHAR(512),
+    Status ENUM('pending', 'completed', 'failed'),
+    CreatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CompletedTimestamp TIMESTAMP NULL,
+    DeviceID INT,
+    FOREIGN KEY (DeviceID) REFERENCES devices(DeviceID)
+);
+```
+
+## Running the Application
+
+1. Ensure your virtual environment is activated
+2. Run the main application:
 ```bash
 python main.py
 ```
 
-### 5. ملاحظات هامة
-- إذا ظهرت رسالة خطأ عن الماك أدريس، تأكد أن ملف التشفير تم إنشاؤه للماك الصحيح.
-- كل مستخدم يجب أن ينشئ ملفات التشفير الخاصة بجهازه.
-- لا تشارك ملفات التشفير بين الأجهزة.
+## Building Executable
 
----
+To create a single executable file:
 
-لأي استفسار أو مشكلة تشغيل، تواصل مع المطور أو راجع الكود المصدري. 
+```bash
+pyinstaller --onefile --hidden-import=getmac --icon=icon.ico main.py
+```
+
+The executable will be created in the `dist` directory.
+
+## Security Notes
+
+- Each device must generate its own encryption files
+- Never share encryption files between devices
+- Keep your AWS credentials secure
+- Regularly backup your database
+
+## Troubleshooting
+
+1. If you get a "MAC address mismatch" error:
+   - Ensure you're running the application on the same device where you generated the config
+   - Generate new config files if needed
+
+2. If the application fails to start:
+   - Check if all dependencies are installed
+   - Verify database connection
+   - Ensure AWS credentials are correct
+
+## Support
+
+For issues and support, please contact the development team.
+
+## License
+
+[Your License Here] 

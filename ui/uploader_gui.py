@@ -23,6 +23,8 @@ from ui.order_selector_dialog import OrderSelectorDialog
 from ui.image_preview_dialog import ImagePreviewDialog
 from ui.task_editor_dialog import TaskEditorDialog
 from utils.background_uploader import BackgroundUploader
+import getmac
+import uuid
 
 class S3UploaderGUI(QMainWindow):
     """
@@ -52,6 +54,17 @@ class S3UploaderGUI(QMainWindow):
         self.load_all_tasks = load_all_tasks
         self.no_auto_login = no_auto_login
         
+        # Get device info early
+        # Use the same MAC address format as in our check script
+        mac = ':'.join(['{:02x}'.format((uuid.getnode() >> elements) & 0xff) for elements in range(0,2*6,2)][::-1])
+        self.mac_address = mac.upper()
+        
+        device_info = self.db_manager.get_device_info_by_mac(self.mac_address)
+        self.device_id = device_info['DeviceID'] if device_info else None
+        self.device_name = device_info['DeviceName'] if device_info else None
+        
+        print(f"Device Name: {self.device_name}")
+        
         # Set default application state
         self.upload_tasks = []
         self.progress_mode = 'upload'
@@ -70,7 +83,17 @@ class S3UploaderGUI(QMainWindow):
         # Initialize settings
         from PyQt5.QtCore import QSettings
         self.settings = QSettings("BALIStudios", "AWSUploader")
-        self.local_storage_path = self.settings.value("local_storage_path", str(Path.home() / "Documents"))
+        
+        # Load local storage path from database first, fallback to QSettings
+        db_storage_path = self.db_manager.get_device_storage_path(self.mac_address)
+        if db_storage_path:
+            self.local_storage_path = db_storage_path
+        else:
+            # Fallback to QSettings for backward compatibility
+            self.local_storage_path = self.settings.value("local_storage_path", str(Path.home() / "Documents"))
+            # Save to database for future use
+            if self.local_storage_path:
+                self.db_manager.update_device_storage_path(self.mac_address, self.local_storage_path)
         
         # Initialize AWS session
         self.init_aws_session()
@@ -189,21 +212,36 @@ class S3UploaderGUI(QMainWindow):
         # User info panel
         user_frame = QFrame()
         user_frame.setFrameShape(QFrame.StyledPanel)
-        user_layout = QHBoxLayout()
+        user_layout = QHBoxLayout()  # Change to horizontal layout
         
-        self.user_info_label = QLabel(f"Welcome {self.user_info['Emp_FullName']}")
-        user_layout.addWidget(self.user_info_label)
+        # Display username on the left without "User:" prefix
+        self.user_label = QLabel(f"{self.user_info.get('Emp_FullName', 'Guest')}")
+        self.user_label.setStyleSheet("font-weight: bold;")
+        user_layout.addWidget(self.user_label)
         
-        # Add login/logout button
-        self.login_button = QPushButton("Logout" if self.user_info.get('is_logged_in', False) else "Login")
-        self.login_button.clicked.connect(self.toggle_login)
-        user_layout.addWidget(self.login_button)
+        # Add spacer to push device name to the right
+        user_layout.addStretch()
         
-        import getmac
-        user_layout.addWidget(QLabel(f"Device ID: {getmac.get_mac_address()}"))
+        # Display device name on the right without "Device:" prefix
+        device_label = QLabel(f"{self.device_name or 'Unknown'}")
+        device_label.setStyleSheet("font-weight: bold;")
+        user_layout.addWidget(device_label)
         
         user_frame.setLayout(user_layout)
         layout.addWidget(user_frame)
+        
+        # Add login/logout button in a separate frame below
+        login_frame = QFrame()
+        login_layout = QHBoxLayout()
+        
+        self.login_button = QPushButton("Logout" if self.user_info.get('is_logged_in', False) else "Login")
+        self.login_button.clicked.connect(self.toggle_login)
+        login_layout.addWidget(self.login_button)
+        
+        login_frame.setLayout(login_layout)
+        layout.addWidget(login_frame)
+        
+        
         
         # Tab widget for different functions
         self.tabs = QTabWidget()
@@ -211,23 +249,6 @@ class S3UploaderGUI(QMainWindow):
         # Upload tab
         upload_tab = QWidget()
         upload_layout = QVBoxLayout()
-        
-        # Local storage path (only field kept from original UI)
-        storage_frame = QFrame()
-        storage_layout = QHBoxLayout()
-        
-        self.local_storage = QLineEdit()
-        self.local_storage.setPlaceholderText("Select local storage path...")
-        self.local_storage.setText(self.local_storage_path)
-        self.local_storage.setReadOnly(True)
-        storage_browse_btn = QPushButton('Browse')
-        storage_browse_btn.clicked.connect(self.browse_local_storage)
-        
-        storage_layout.addWidget(QLabel('Local Storage Path:'))
-        storage_layout.addWidget(self.local_storage)
-        storage_layout.addWidget(storage_browse_btn)
-        storage_frame.setLayout(storage_layout)
-        upload_layout.addWidget(storage_frame)
         
         # Add big Upload Photoshoot button in place of removed task details
         upload_photoshoot_frame = QFrame()
@@ -250,6 +271,7 @@ class S3UploaderGUI(QMainWindow):
         self.task_list = QListWidget()
         self.task_list.setMinimumHeight(200)  # توازن أفضل بين القوائم
         self.task_list.itemSelectionChanged.connect(self.on_task_selected)
+        self.task_list.itemDoubleClicked.connect(self.on_task_double_clicked)
         upload_layout.addWidget(self.task_list)
         
         # إضافة مسافة رأسية بين قائمة المهام وقائمة اللوج
@@ -421,10 +443,60 @@ class S3UploaderGUI(QMainWindow):
         
         activity_tab.setLayout(activity_layout)
         
-        # Add tabs to widget
+        # Storage tab
+        storage_tab = QWidget()
+        storage_layout = QVBoxLayout()
+        
+        # Storage settings section
+        storage_settings_frame = QFrame()
+        storage_settings_frame.setFrameShape(QFrame.StyledPanel)
+        storage_settings_layout = QVBoxLayout()
+        
+        # Title
+        storage_title = QLabel("Local Storage Settings")
+        storage_title.setStyleSheet("font-weight: bold; font-size: 14pt; margin-bottom: 10px;")
+        storage_settings_layout.addWidget(storage_title)
+        
+        # Current path display
+        current_path_label = QLabel("Current Local Storage Path:")
+        current_path_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        storage_settings_layout.addWidget(current_path_label)
+        
+        # Get current storage path from database
+        current_storage_path = self.db_manager.get_device_storage_path(self.mac_address)
+        if not current_storage_path:
+            # Fallback to QSettings if not in database
+            from PyQt5.QtCore import QSettings
+            settings = QSettings('AWSUploader', 'Settings')
+            current_storage_path = settings.value('local_storage_path', 'Not set')
+        
+        self.current_storage_label = QLabel(current_storage_path or "Not set")
+        self.current_storage_label.setStyleSheet("color: #666; padding: 10px; background-color: #f0f0f0; border-radius: 5px; margin-bottom: 15px;")
+        self.current_storage_label.setWordWrap(True)
+        storage_settings_layout.addWidget(self.current_storage_label)
+        
+        # Change storage path button
+        change_storage_btn = QPushButton("Change Storage Location")
+        change_storage_btn.clicked.connect(self.open_settings)
+        change_storage_btn.setStyleSheet("QPushButton { padding: 10px; font-size: 12pt; background-color: #4CAF50; color: white; font-weight: bold; }")
+        storage_settings_layout.addWidget(change_storage_btn)
+        
+        # Add some spacing
+        storage_settings_layout.addStretch()
+        
+        storage_settings_frame.setLayout(storage_settings_layout)
+        storage_layout.addWidget(storage_settings_frame)
+        
+        # Add stretch to push everything to the top
+        storage_layout.addStretch()
+        
+        storage_tab.setLayout(storage_layout)
+        
+        # Add tabs to tab widget
         self.tabs.addTab(upload_tab, "Upload Files")
         self.tabs.addTab(history_tab, "Upload History")
         self.tabs.addTab(activity_tab, "Activity Log")
+        self.tabs.addTab(storage_tab, "Storage")
         
         layout.addWidget(self.tabs)
         
@@ -466,7 +538,7 @@ class S3UploaderGUI(QMainWindow):
                 
                 # Update UI
                 self.login_button.setText("Login")
-                self.user_info_label.setText("Not logged in")
+                self.user_label.setText("User: Guest")
                 
                 # Disable sensitive operations
                 self.disable_authenticated_features()
@@ -486,7 +558,7 @@ class S3UploaderGUI(QMainWindow):
                     
                     # Update UI
                     self.login_button.setText("Logout")
-                    self.user_info_label.setText(f"Welcome {self.user_info['Emp_FullName']}")
+                    self.user_label.setText(f"User: {self.user_info['Emp_FullName']}")
                     
                     # Log the login
                     self.log_message(f"Logged in as {self.user_info['Emp_FullName']}")
@@ -587,7 +659,7 @@ class S3UploaderGUI(QMainWindow):
                     
                     # Update UI
                     self.login_button.setText("Logout")
-                    self.user_info_label.setText(f"Welcome {self.user_info['Emp_FullName']}")
+                    self.user_label.setText(f"User: {self.user_info['Emp_FullName']}")
                     
                     # Log the login
                     self.log_message(f"Logged in as {self.user_info['Emp_FullName']}")
@@ -609,7 +681,7 @@ class S3UploaderGUI(QMainWindow):
         self.upload_photoshoot_btn.setEnabled(False)
         
         # Start Task and Resume Task buttons don't need authentication anymore
-        # self.start_all_btn.setEnabled(False)
+        # # self.start_all_btn.setEnabled(False)
         # self.pause_btn.setEnabled(False)
         # self.resume_btn.setEnabled(False)
         # self.restart_btn.setEnabled(False)
@@ -878,7 +950,7 @@ class S3UploaderGUI(QMainWindow):
         if not show:
             return
         print(message)
-        if hasattr(self, 'log_text') and self.log_text is not None:
+        if hasattr(self, 'log_text'):
             current = self.log_text.toPlainText()
             if current:
                 self.log_text.setPlainText(f"{message}\n" + current)
@@ -890,13 +962,42 @@ class S3UploaderGUI(QMainWindow):
             self._pending_log_messages.insert(0, message)
     
     def browse_local_storage(self):
-        """Browse for local storage location"""
+        """Browse for local storage location and save to database"""
         folder = QFileDialog.getExistingDirectory(self, 'Select Local Storage Location')
         if folder:
-            self.local_storage.setText(folder)
+            # Update local variable
             self.local_storage_path = folder
-            self.settings.setValue("local_storage_path", folder)
-            self.log_message(f"Local storage location set to: {folder}")
+            # Save to database
+            if self.db_manager.update_device_storage_path(self.mac_address, folder):
+                self.log_message(f"Local storage path updated to: {folder}")
+            else:
+                self.log_message("Warning: Failed to save storage path to database")
+    
+    def open_settings(self):
+        """Open settings dialog"""
+        try:
+            # Get current storage path from database
+            current_path = self.db_manager.get_device_storage_path(self.mac_address)
+            if not current_path:
+                # Fallback to QSettings if not in database
+                from PyQt5.QtCore import QSettings
+                settings = QSettings('AWSUploader', 'Settings')
+                current_path = settings.value('local_storage_path', None)
+            
+            from ui.settings_dialog import SettingsDialog
+            dialog = SettingsDialog(self.db_manager, self.mac_address, current_path, self)
+            
+            if dialog.exec_() == dialog.Accepted:
+                new_path = dialog.get_new_path()
+                if new_path:
+                    # Update the display in Storage tab
+                    if hasattr(self, 'current_storage_label'):
+                        self.current_storage_label.setText(new_path)
+                    self.log_message(f"Storage path updated to: {new_path}")
+                    
+        except Exception as e:
+            self.log_message(f"Error opening settings: {str(e)}")
+            print(f"Settings error: {e}")
     
     def add_photoshoot_task(self):
         """Open dialog for adding a new photoshoot upload task"""
@@ -904,11 +1005,20 @@ class S3UploaderGUI(QMainWindow):
         if not self.ensure_user_logged_in():
             return
             
-        if not self.local_storage_path:
-            QMessageBox.warning(self, "Warning", "Please select a local storage location first")
-            self.browse_local_storage()
-            if not self.local_storage_path:
-                return
+        # Get current storage path from database
+        current_storage_path = self.db_manager.get_device_storage_path(self.mac_address)
+        if not current_storage_path:
+            # Fallback to QSettings if not in database
+            from PyQt5.QtCore import QSettings
+            settings = QSettings('AWSUploader', 'Settings')
+            current_storage_path = settings.value('local_storage_path', None)
+        
+        if not current_storage_path:
+            QMessageBox.warning(self, "Warning", "Please configure local storage location first in the Storage tab")
+            return
+        
+        # Update local variable
+        self.local_storage_path = current_storage_path
         
         dialog = TaskEditorDialog(self.db_manager, self.local_storage_path, parent=self)
         if dialog.exec_() == QDialog.Accepted:
@@ -939,7 +1049,8 @@ class S3UploaderGUI(QMainWindow):
                 'uploader': None,
                 'status': 'pending',
                 'progress': 0,
-                'local_path': task_data['local_path']
+                'local_path': task_data['local_path'],
+                'device_id': self.device_id,
             }
             
             # Save task to database
@@ -951,9 +1062,14 @@ class S3UploaderGUI(QMainWindow):
             self.upload_tasks.append(task)
             
             # Enable the start all button if we have tasks
-            self.start_all_btn.setEnabled(len(self.upload_tasks) > 0)
+            # self.start_all_btn.setEnabled(len(self.upload_tasks) > 0)
             
             self.log_message(f"Added new photoshoot task {task_id} for order {task_data['order_number']}")
+            self.log_message(f"Local path: {task_data['local_path']}")
+            
+            # Auto-start the task immediately
+            self.start_task(task)
+            self.log_message(f"Task {task_id} started automatically")
     
     def modify_selected_task(self):
         """Open dialog for modifying the selected task"""
@@ -1064,9 +1180,6 @@ class S3UploaderGUI(QMainWindow):
             self.delete_btn.setEnabled(False)
             self.cancel_btn.setEnabled(False)
         
-        self.log_message(f"Selected task {task_id} in state: {task['status']}")
-        
-        # Start, Resume, Restart buttons are always enabled regardless of login status
         # Enable/disable buttons based on task status
         if task['status'] == 'running':
             self.pause_btn.setEnabled(True)
@@ -1075,15 +1188,77 @@ class S3UploaderGUI(QMainWindow):
         elif task['status'] == 'paused':
             self.pause_btn.setEnabled(False)
             self.resume_btn.setEnabled(True)
-            self.restart_btn.setEnabled(False)
-        elif task['status'] in ['completed', 'cancelled']:
+            self.restart_btn.setEnabled(True)
+        elif task['status'] in ['completed', 'failed', 'cancelled']:
             self.pause_btn.setEnabled(False)
             self.resume_btn.setEnabled(False)
             self.restart_btn.setEnabled(True)
-        elif task['status'] == 'pending':
+        else:  # pending
             self.pause_btn.setEnabled(False)
             self.resume_btn.setEnabled(False)
-            self.restart_btn.setEnabled(True)  # Enable restart for pending tasks
+            self.restart_btn.setEnabled(True)
+    
+    def on_task_double_clicked(self, item):
+        """Handle double-click on task item to open folder"""
+        try:
+            # Get the selected task
+            task_data = item.data(Qt.UserRole)
+            
+            # Check if task_data is a dictionary or a direct task_id
+            if isinstance(task_data, dict):
+                task_id = task_data['id']
+            else:
+                # If task_data is the task_id directly
+                task_id = task_data
+            
+            task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
+            
+            if not task:
+                self.log_message(f"Error: Could not find task with ID {task_id}")
+                return
+            
+            # Get the folder path
+            folder_path = task.get('folder_path', '')
+            if not folder_path:
+                QMessageBox.warning(self, "Warning", "No folder path found for this task")
+                return
+            
+            # Check if folder exists
+            if not os.path.exists(folder_path):
+                QMessageBox.warning(self, "Warning", f"Folder does not exist:\n{folder_path}")
+                return
+            
+            # Open folder based on operating system
+            self.open_folder_in_explorer(folder_path)
+            self.log_message(f"Opened folder for task {task_id}: {folder_path}")
+            
+        except Exception as e:
+            self.log_message(f"Error opening folder: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Failed to open folder: {str(e)}")
+    
+    def open_folder_in_explorer(self, folder_path):
+        """
+        Open folder in the default file explorer based on operating system
+        
+        Args:
+            folder_path (str): Path to the folder to open
+        """
+        try:
+            import sys
+            import subprocess
+            
+            if sys.platform == 'win32':
+                # Windows
+                os.startfile(folder_path)
+            elif sys.platform == 'darwin':
+                # macOS
+                subprocess.Popen(['open', folder_path])
+            else:
+                # Linux and other Unix-like systems
+                subprocess.Popen(['xdg-open', folder_path])
+                
+        except Exception as e:
+            raise Exception(f"Failed to open folder: {str(e)}")
     
     def start_all_tasks(self):
         """Start all pending upload tasks sequentially"""
@@ -1115,34 +1290,54 @@ class S3UploaderGUI(QMainWindow):
                 self.log_message(f"Error: Local storage path missing for task {task.get('order_number')}")
                 return
             
-            # Validate paths before starting
-            if not os.path.exists(task['local_path']):
-                self.log_message(f"Warning: Local storage path does not exist: {task['local_path']}")
-                reply = QMessageBox.question(
-                    self, 
-                    "Path Not Found", 
-                    f"Local storage path for task {task['order_number']} does not exist:\n{task['local_path']}\n\nDo you want to update it?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.Yes
-                )
-                
-                if reply == QMessageBox.Yes:
-                    # Open folder selection dialog
-                    new_folder = QFileDialog.getExistingDirectory(
-                        self, 
-                        f'Select local storage folder for task {task["order_number"]}'
-                    )
-                    if new_folder:
-                        task['local_path'] = new_folder
-                        self.log_message(f"Updated local storage path to: {new_folder}")
-                        
-                        # Update database
-                        self.save_task_to_database(task)
-                    else:
-                        self.log_message("No folder selected, cannot start task")
-                        return
+            # Build the full path by combining base storage path with relative path
+            base_storage_path = self.db_manager.get_device_storage_path(self.mac_address)
+            if not base_storage_path:
+                # Fallback to QSettings if not in database
+                from PyQt5.QtCore import QSettings
+                settings = QSettings('AWSUploader', 'Settings')
+                base_storage_path = settings.value('local_storage_path', None)
+            
+            if base_storage_path:
+                # Check if local_path is already a full path (contains base_storage_path)
+                if task['local_path'].startswith(base_storage_path):
+                    # local_path is already a full path, use it directly
+                    full_local_path = task['local_path']
+                    print(f"Using existing full path: {full_local_path}")
                 else:
+                    # Create full path by combining base and relative path
+                    if task['local_path'].startswith('/'):
+                        # Remove leading slash from relative path
+                        relative_path = task['local_path'][1:]
+                    else:
+                        relative_path = task['local_path']
+                    
+                    full_local_path = os.path.join(base_storage_path, relative_path)
+                    print(f"Created full path: {full_local_path}")
+                
+                # Update task with full path
+                task['full_local_path'] = full_local_path
+                
+                # Check if full path exists
+                if not os.path.exists(full_local_path):
+                    print(f"Warning: Local storage path does not exist: {full_local_path}")
                     return
+            else:
+                # No base storage path configured, use local_path directly
+                full_local_path = task['local_path']
+                task['full_local_path'] = full_local_path
+                
+                if not os.path.exists(full_local_path):
+                    if task.get('folder_path') and os.path.exists(task['folder_path']):
+                        task['local_path'] = task['folder_path']
+                        task['full_local_path'] = task['folder_path']
+                        print(f"Using folder_path as local_path for task {task['order_number']}")
+                    else:
+                        print(f"Warning: Local storage path does not exist: {full_local_path}")
+                        return
+            
+            # Update task with full path for the uploader
+            task['full_local_path'] = full_local_path
             
             # Check AWS session before starting
             if self.aws_session is None:
@@ -1288,7 +1483,7 @@ class S3UploaderGUI(QMainWindow):
                         task['order_date'],
                         self.aws_session,
                         task['photographers'],
-                        task['local_path'],
+                        task.get('full_local_path', task['local_path']),  # Use full path if available
                         self
                     )
                     
@@ -1350,7 +1545,7 @@ class S3UploaderGUI(QMainWindow):
                         task['order_date'],
                         self.aws_session,
                         task['photographers'],
-                        task['local_path'],
+                        task.get('full_local_path', task['local_path']),  # Use full path if available
                         self
                     )
                     
@@ -1825,7 +2020,7 @@ class S3UploaderGUI(QMainWindow):
         self.on_task_selected()
         
         # Enable/disable start all button based on pending tasks
-        self.start_all_btn.setEnabled(any(t['status'] == 'pending' for t in self.upload_tasks))
+        # self.start_all_btn.setEnabled(any(t['status'] == 'pending' for t in self.upload_tasks))
     
     def save_task_to_database(self, task):
         """
@@ -1951,7 +2146,8 @@ class S3UploaderGUI(QMainWindow):
                     "progress = %s",
                     "main_photographer_id = %s",
                     "assistant_photographer_id = %s",
-                    "video_photographer_id = %s"
+                    "video_photographer_id = %s",
+                    "DeviceID = %s"
                 ]
                 # إذا كانت المهمة مكتملة، حدث completed_timestamp
                 if task.get('status') == 'completed':
@@ -1989,7 +2185,8 @@ class S3UploaderGUI(QMainWindow):
                     task.get('progress', 0),
                     task.get('photographers', {}).get('main'),
                     task.get('photographers', {}).get('assistant'),
-                    task.get('photographers', {}).get('video')
+                    task.get('photographers', {}).get('video'),
+                    task.get('device_id', self.device_id)
                 ]
                 
                 # Add task_state_path if included in the query
@@ -2017,7 +2214,8 @@ class S3UploaderGUI(QMainWindow):
                 insert_columns = [
                     "order_number", "order_date", "folder_path", "local_path",
                     "status", "progress",
-                    "main_photographer_id", "assistant_photographer_id", "video_photographer_id"
+                    "main_photographer_id", "assistant_photographer_id", "video_photographer_id",
+                    "DeviceID"
                 ]
                 
                 values = [
@@ -2029,7 +2227,8 @@ class S3UploaderGUI(QMainWindow):
                     task.get('progress', 0),
                     task.get('photographers', {}).get('main'),
                     task.get('photographers', {}).get('assistant'),
-                    task.get('photographers', {}).get('video')
+                    task.get('photographers', {}).get('video'),
+                    task.get('device_id', self.device_id)
                 ]
                 
                 # Add task_state_path if it exists
@@ -2207,43 +2406,53 @@ class S3UploaderGUI(QMainWindow):
     
     def load_tasks_from_database(self):
         """Load tasks from database"""
-        if not self.db_manager or not self.db_manager.connection:
+        if not self.db_manager:
+                return
+                
+        if not self.db_manager.connection:
             return
+            
+        if not self.db_manager.connection.is_connected():
+            try:
+                self.db_manager.connect()
+            except Exception as e:
+                print(f"Failed to reconnect to database: {str(e)}")
+                return
             
         try:
             with self.db_manager.connection.cursor(dictionary=True) as cursor:
-                # Get today's date
-                today = datetime.now().date()
-                
                 # Query for incomplete tasks and completed tasks in the last 24 hours
                 query = """
-                SELECT task_id, order_number, status, progress, 
-                       created_at, completed_timestamp, folder_path, local_path,
-                       main_photographer_id, assistant_photographer_id, video_photographer_id,
-                       order_date
-                FROM upload_tasks 
-                WHERE status != 'completed' 
-                   OR (status = 'completed' AND completed_timestamp >= NOW() - INTERVAL 1 DAY)
+                SELECT t.task_id, t.order_number, t.status, t.progress, 
+                       t.created_at, t.completed_timestamp, t.folder_path, t.local_path,
+                       t.main_photographer_id, t.assistant_photographer_id, t.video_photographer_id,
+                       t.order_date, t.DeviceID, d.DeviceName
+                FROM upload_tasks t
+                LEFT JOIN devices d ON t.DeviceID = d.DeviceID
+                WHERE t.DeviceID = %s
                 ORDER BY 
                     CASE 
-                        WHEN status = 'running' THEN 1
-                        WHEN status = 'paused' THEN 2
-                        WHEN status = 'pending' THEN 3
-                        WHEN status = 'completed' THEN 4
+                        WHEN t.status = 'running' THEN 1
+                        WHEN t.status = 'paused' THEN 2
+                        WHEN t.status = 'pending' THEN 3
+                        WHEN t.status = 'completed' THEN 4
                         ELSE 5
                     END,
-                    created_at DESC
+                    t.created_at DESC
                 """
                 
                 # Execute query
-                cursor.execute(query)
+                cursor.execute(query, (self.device_id,))
                 results = cursor.fetchall()
+                
+                if not results:
+                    return
                 
                 for db_task in results:
                     # Skip tasks that are already in the list
                     if any(t['order_number'] == db_task['order_number'] for t in self.upload_tasks):
                         continue
-                    
+                            
                     # Create task object
                     task_id = len(self.upload_tasks) + 1
                     task = {
@@ -2260,19 +2469,145 @@ class S3UploaderGUI(QMainWindow):
                             'video': db_task.get('video_photographer_id')
                         },
                         'order_date': self._parse_safe_date(db_task.get('order_date')),
-                        'db_id': db_task['task_id']
+                        'db_id': db_task['task_id'],
+                        'device_id': db_task['DeviceID'],
+                        'device_name': db_task['DeviceName'],
                     }
                     
-                    # Add task to list and update UI
-                    self.upload_tasks.append(task)
-                    self.update_task_list(task)
+                    # Build full path for the task
+                    base_storage_path = self.db_manager.get_device_storage_path(self.mac_address)
+                    if base_storage_path and task['local_path']:
+                        # Create full path
+                        if task['local_path'].startswith('/'):
+                            # Remove leading slash from relative path
+                            relative_path = task['local_path'][1:]
+                        else:
+                            relative_path = task['local_path']
+                        
+                        full_local_path = os.path.join(base_storage_path, relative_path)
+                        task['full_local_path'] = full_local_path
                     
+                    # Create QListWidgetItem for the task
+                    from PyQt5.QtWidgets import QListWidgetItem
+                    from PyQt5.QtCore import Qt
+                    
+                    task_item = QListWidgetItem()
+                    task_item.setText(f"Task {task_id}: Order {task['order_number']} - {task['status'].capitalize()}")
+                    task_item.setData(Qt.UserRole, task_id)
+                    
+                    # Add item to task
+                    task['item'] = task_item
+                    
+                    # Add to the list widget
+                    self.task_list.addItem(task_item)
+                    
+                    # Add task to list
+                    self.upload_tasks.append(task)
+                
+                if self.upload_tasks:
+                    print(f"Loaded {len(self.upload_tasks)} tasks from database")
+                    
+                    # Auto-start pending tasks
+                    pending_tasks = [task for task in self.upload_tasks if task['status'] == 'pending']
+                    if pending_tasks:
+                        print(f"Auto-starting {len(pending_tasks)} pending tasks...")
+                        import time
+                        for i, task in enumerate(pending_tasks):
+                            try:
+                                # Add delay between tasks (except for the first one)
+                                if i > 0:
+                                    time.sleep(2)  # Wait 2 seconds between tasks
+                                
+                                self.auto_start_task(task)
+                                print(f"Auto-started task {task['id']}: Order {task['order_number']}")
+                            except Exception as e:
+                                print(f"Failed to auto-start task {task['id']}: {str(e)}")
+                
                 cursor.close()
                 
         except Exception as e:
-            self.log_message(f"Error loading tasks from database: {str(e)}")
+            print(f"Error loading tasks from database: {str(e)}")
             import traceback
-            self.log_message(traceback.format_exc())
+            traceback.print_exc()
+
+    def auto_start_task(self, task):
+        """
+        Automatically start a task without user interaction
+        """
+        try:
+            if not task:
+                return
+            
+            # Check if we have the required data
+            if not task.get('local_path'):
+                print(f"Error: Local storage path missing for task {task.get('order_number')}")
+                return
+            
+            # Check if path exists, if not, try to use folder_path
+            if not os.path.exists(task['local_path']):
+                if task.get('folder_path') and os.path.exists(task['folder_path']):
+                    task['local_path'] = task['folder_path']
+                    print(f"Using folder_path as local_path for task {task['order_number']}")
+                else:
+                    print(f"Warning: Local storage path does not exist: {task['local_path']}")
+                    return
+            
+            # Skip AWS session check for auto-start - assume it will be available
+            if self.aws_session is None:
+                print(f"Warning: No AWS session available for task {task['order_number']}, will try to start anyway")
+            
+            # Update task status to running
+            task['status'] = 'running'
+            self.update_task_list(task)
+            
+            # Clean up previous thread if it exists
+            if task.get('uploader') is not None:
+                try:
+                    if task['uploader'].isRunning():
+                        task['uploader'].stop()
+                        task['uploader'].wait(1000)
+                    task['uploader'] = None
+                except Exception as e:
+                    print(f"Warning: Error cleaning up old thread: {str(e)}")
+                    task['uploader'] = None
+            
+            # Create a new uploader
+            from utils.background_uploader import BackgroundUploader
+            
+            uploader = BackgroundUploader(
+                task['folder_path'],
+                task['order_number'],
+                task['order_date'],
+                self.aws_session,
+                task['photographers'],
+                task.get('full_local_path', task['local_path']),  # Use full path if available
+                self
+            )
+            
+            # Connect signals
+            try:
+                uploader.progress.connect(lambda current, total, task_id=task['id']: 
+                        self.update_task_progress(task_id, current, total))
+                uploader.log.connect(lambda message, task_id=task['id']: 
+                        self.log_task_message(task_id, message))
+                uploader.finished.connect(lambda task_id=task['id']: 
+                        self.task_finished(task_id))
+            except Exception as signal_error:
+                print(f"Error connecting signals: {str(signal_error)}")
+            
+            # Set the uploader in the task
+            task['uploader'] = uploader
+            
+            # Start the upload
+            uploader.start()
+            
+            print(f"Auto-started upload for order {task['order_number']}")
+            
+        except Exception as e:
+            print(f"Error auto-starting task {task.get('order_number', 'unknown')}: {str(e)}")
+            if task:
+                task['status'] = 'pending'
+                self.update_task_list(task)
 
     def check_db_schema(self):
         """Verify database schema for user authentication"""
@@ -2561,11 +2896,12 @@ class S3UploaderGUI(QMainWindow):
             
             # Build the query with filters
             query = f"""
-            SELECT {id_column} as task_id, order_number, status, progress, 
-                   created_at, updated_at, folder_path, created_by, 
-                   order_date, main_photographer_id, assistant_photographer_id, 
-                   video_photographer_id, local_path
-            FROM upload_tasks 
+            SELECT t.task_id, t.order_number, t.status, t.progress, 
+                   t.created_at, t.updated_at, t.folder_path, t.created_by, 
+                   t.order_date, t.main_photographer_id, t.assistant_photographer_id, 
+                   t.video_photographer_id, t.local_path, t.DeviceID, d.DeviceName
+            FROM upload_tasks t
+            LEFT JOIN devices d ON t.DeviceID = d.DeviceID
             WHERE 1=1
             """
             
@@ -2900,7 +3236,7 @@ class S3UploaderGUI(QMainWindow):
             created_date = upload_data.get('created_at')
             if created_date:
                 if hasattr(created_date, 'strftime'):
-                    created_str = created_date.strftime("%Y-%m-%d %H:%M:%S")
+                    created_str = created_date.strftime("%Y-%m-%d %H:%M")
                 else:
                     created_str = str(created_date)
                 html += f"<tr><td><b>Created:</b></td><td>{created_str}</td></tr>"
@@ -2952,6 +3288,9 @@ class S3UploaderGUI(QMainWindow):
             if video_photographer_id:
                 photographer_name = self.get_photographer_name(video_photographer_id)
                 html += f"<tr><td><b>Video Photographer:</b></td><td>{photographer_name}</td></tr>"
+                
+            device_name = upload_data.get('DeviceName', 'Unknown')
+            html += f"<tr><td><b>Device:</b></td><td>{device_name}</td></tr>"
                 
             html += "</table>"
             
@@ -3126,7 +3465,9 @@ class S3UploaderGUI(QMainWindow):
                 'uploader': None,
                 'photographers': photographers,
                 'order_date': task_data.get('order_date'),
-                'db_id': task_id  # Keep original task ID for database updates
+                'db_id': task_id,  # Keep original task ID for database updates
+                'device_id': self.device_id,
+                'device_name': self.device_name,
             }
             
             # Create a task item for the list
@@ -3147,7 +3488,7 @@ class S3UploaderGUI(QMainWindow):
             self.upload_tasks.append(task)
             
             # Enable the Start All button
-            self.start_all_btn.setEnabled(True)
+            # self.start_all_btn.setEnabled(True)
             
             # Switch to Upload tab
             self.tabs.setCurrentIndex(0)
@@ -3544,16 +3885,16 @@ class S3UploaderGUI(QMainWindow):
         elif task['status'] == 'paused':
             self.pause_btn.setEnabled(False)
             self.resume_btn.setEnabled(True)
-            self.restart_btn.setEnabled(False)
+            self.restart_btn.setEnabled(True)
             self.cancel_btn.setEnabled(True)
             self.delete_btn.setEnabled(False)
-        elif task['status'] in ['completed', 'cancelled', 'error']:
+        elif task['status'] in ['completed', 'failed', 'cancelled']:
             self.pause_btn.setEnabled(False)
             self.resume_btn.setEnabled(False)
             self.restart_btn.setEnabled(True)
             self.cancel_btn.setEnabled(False)
             self.delete_btn.setEnabled(True)
-        elif task['status'] == 'pending':
+        else:  # pending
             self.pause_btn.setEnabled(False)
             self.resume_btn.setEnabled(False)
             self.restart_btn.setEnabled(False)

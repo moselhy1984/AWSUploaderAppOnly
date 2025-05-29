@@ -655,3 +655,76 @@ class DatabaseManager:
         except mysql.connector.Error as e:
             print(f"Database error in auto_authenticate: {str(e)}")
             return False
+    
+    def get_device_info_by_mac(self, mac_address):
+        """
+        Get DeviceID and DeviceName from devices table by MAC address
+        """
+        try:
+            if not self.connection or not self.connection.is_connected():
+                self.connect()
+            cursor = self.connection.cursor(dictionary=True)
+            query = """
+            SELECT DeviceID, DeviceName, local_storage_path FROM devices WHERE Mac_Address = %s
+            """
+            cursor.execute(query, (mac_address,))
+            result = cursor.fetchone()
+            cursor.close()
+            return result if result else None
+        except Exception as e:
+            print(f"Error getting device info: {e}")
+            return None
+
+    def update_device_storage_path(self, mac_address, storage_path):
+        """
+        Update local_storage_path for a device by MAC address
+        """
+        try:
+            if not self.connection or not self.connection.is_connected():
+                self.connect()
+            cursor = self.connection.cursor()
+            
+            # First check if local_storage_path column exists
+            check_query = """
+            SELECT COUNT(*) as column_exists 
+            FROM information_schema.COLUMNS 
+            WHERE TABLE_SCHEMA = %s 
+            AND TABLE_NAME = 'devices' 
+            AND COLUMN_NAME = 'local_storage_path'
+            """
+            cursor.execute(check_query, (self.rds_config['database'],))
+            result = cursor.fetchone()
+            column_exists = result[0] if result else 0
+            
+            if column_exists == 0:
+                # Add the column if it doesn't exist
+                alter_query = """
+                ALTER TABLE devices ADD COLUMN local_storage_path VARCHAR(500) NULL
+                """
+                cursor.execute(alter_query)
+                print("Added local_storage_path column to devices table")
+            
+            # Update the storage path
+            update_query = """
+            UPDATE devices SET local_storage_path = %s WHERE Mac_Address = %s
+            """
+            cursor.execute(update_query, (storage_path, mac_address))
+            self.connection.commit()
+            cursor.close()
+            return True
+        except Exception as e:
+            print(f"Error updating device storage path: {e}")
+            return False
+
+    def get_device_storage_path(self, mac_address):
+        """
+        Get local_storage_path for a device by MAC address
+        """
+        try:
+            device_info = self.get_device_info_by_mac(mac_address)
+            if device_info and 'local_storage_path' in device_info:
+                return device_info['local_storage_path']
+            return None
+        except Exception as e:
+            print(f"Error getting device storage path: {e}")
+            return None

@@ -567,9 +567,44 @@ class BackgroundUploader(QThread):
         
         # Prepare path structure
         try:
-            year = self.order_date.year
-            month = f"{self.order_date.month:02d}-{year}"
-            day = f"{self.order_date.day:02d}-{month}"
+            # Handle both string and datetime objects for order_date
+            if isinstance(self.order_date, str):
+                try:
+                    # Try different date formats
+                    if 'T' in self.order_date:
+                        # ISO format with time
+                        order_date_obj = datetime.fromisoformat(self.order_date.replace('Z', '+00:00'))
+                    elif '-' in self.order_date:
+                        # Date format YYYY-MM-DD
+                        order_date_obj = datetime.strptime(self.order_date, '%Y-%m-%d')
+                    else:
+                        # Use current date as fallback
+                        order_date_obj = datetime.now()
+                except:
+                    # Use current date as fallback
+                    order_date_obj = datetime.now()
+            elif hasattr(self.order_date, 'year') and hasattr(self.order_date, 'month') and hasattr(self.order_date, 'day'):
+                # Handle QDate objects
+                try:
+                    if hasattr(self.order_date, 'toPython'):
+                        # QDate object
+                        order_date_obj = datetime.combine(self.order_date.toPython(), datetime.min.time())
+                    else:
+                        # datetime.date object
+                        order_date_obj = datetime.combine(self.order_date, datetime.min.time())
+                except:
+                    # Use current date as fallback
+                    order_date_obj = datetime.now()
+            else:
+                # Assume it's already a datetime object or use current date
+                try:
+                    order_date_obj = self.order_date if hasattr(self.order_date, 'year') else datetime.now()
+                except:
+                    order_date_obj = datetime.now()
+            
+            year = order_date_obj.year
+            month = f"{order_date_obj.month:02d}-{year}"
+            day = f"{order_date_obj.day:02d}-{order_date_obj.month:02d}-{year}"
             base_prefix = f"{year}/{month}/{day}/Order_{self.order_number}"
         except Exception as e:
             self.log.emit(f"Error creating path structure: {str(e)}")
@@ -577,7 +612,7 @@ class BackgroundUploader(QThread):
             now = datetime.now()
             year = now.year
             month = f"{now.month:02d}-{year}"
-            day = f"{now.day:02d}-{month}"
+            day = f"{now.day:02d}-{now.month:02d}-{year}"
             base_prefix = f"{year}/{month}/{day}/Order_{self.order_number}"
             self.log.emit(f"Using alternative path structure: {base_prefix}")
         

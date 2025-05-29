@@ -342,6 +342,7 @@ class TaskEditorDialog(QDialog):
     def create_local_folders(self, order_number):
         """
         Create folder structure for the selected order
+        Format: YYYY/MM-YYYY/DD-MM-YYYY/Order_XXXXXX
         
         Args:
             order_number (str): Order number
@@ -354,16 +355,16 @@ class TaskEditorDialog(QDialog):
         
         date_obj = self.order_date.date().toPyDate()
         year = date_obj.year
-        month = f"{date_obj.month:02d}-{year}"
-        day = f"{date_obj.day:02d}-{month}"
+        month = f"{date_obj.month:02d}-{year}"  # MM-YYYY format
+        day = f"{date_obj.day:02d}-{date_obj.month:02d}-{year}"  # DD-MM-YYYY format
         
-        # Create folder structure
+        # Create folder structure: base_path/YYYY/MM-YYYY/DD-MM-YYYY/Order_XXXXXX
         base_path = Path(self.local_storage_path) / str(year) / month / day / f"Order_{order_number}"
         
         # Create the main folders
         folders = [
             base_path / "CR2",
-            base_path / "JPG",
+            base_path / "JPG", 
             base_path / "Reels/Videos",
             base_path / "OTHER"
         ]
@@ -502,13 +503,25 @@ class TaskEditorDialog(QDialog):
         # Ensure current_order_path is set, use folder_path if it's None
         if self.current_order_path is None:
             self.current_order_path = self.folder_path.text()
+        
+        # Calculate relative path from base storage path
+        full_path = Path(self.folder_path.text())
+        base_storage = Path(self.local_storage_path)
+        
+        try:
+            # Get the relative path from base storage (this will be the part from year onwards)
+            relative_path = full_path.relative_to(base_storage)
+            local_path_str = "/" + str(relative_path).replace("\\", "/")
+        except ValueError:
+            # If the path is not relative to base storage, use the full path
+            local_path_str = str(full_path)
             
         task_data = {
             'order_number': self.order_number.text(),
             'order_date': self.order_date.date().toPyDate(),
             'folder_path': self.folder_path.text(),
             'photographers': self.photographers.copy(),
-            'local_path': self.current_order_path
+            'local_path': local_path_str
         }
         
         # If editing, preserve task ID

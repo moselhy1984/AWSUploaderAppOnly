@@ -1,33 +1,66 @@
 # Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Virtual environments
+# Virtual Environment
 venv/
 .venv/
 ENV/
+env/
 
-# System files
-.DS_Store
-Thumbs.db
-
-# IDE/editor settings
+# IDE
 .idea/
 .vscode/
 *.swp
+*.swo
+.DS_Store
+Thumbs.db
 
-# Encryption/config files (each user should generate their own)
+# Application specific
 config.enc
 encryption_key.txt
-
-# OS-specific
-*.bak
-*.tmp
-
-# Logs
 *.log
+*.db
+*.sqlite3
 
-# Others
-*.egg-info/ 
+# Build files
+*.spec
+build/
+dist/
+*.exe
+*.app
+*.dmg
+
+# AWS credentials
+.aws/
+credentials
+config
+
+# Database backups
+*.sql
+*.dump
+*.bak
+
+# Temporary files
+*.tmp
+*.temp
+.coverage
+htmlcov/ 
