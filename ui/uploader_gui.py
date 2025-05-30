@@ -945,14 +945,49 @@ class S3UploaderGUI(QMainWindow):
             else:
                 print(f"Warning: Icon file not found at {icon_path}")
         
+        # Create tray menu
         tray_menu = QMenu()
+        
+        # Show/Hide action
         show_action = tray_menu.addAction("Show")
-        show_action.triggered.connect(self.show)
+        show_action.triggered.connect(self.show_from_tray)
+        
+        # Add separator
+        tray_menu.addSeparator()
+        
+        # Upload status action (informational)
+        running_tasks = len([t for t in self.upload_tasks if t.get('status') == 'running'])
+        if running_tasks > 0:
+            status_action = tray_menu.addAction(f"🔄 {running_tasks} uploads running")
+            status_action.setEnabled(False)  # Make it non-clickable
+        else:
+            status_action = tray_menu.addAction("✅ No active uploads")
+            status_action.setEnabled(False)  # Make it non-clickable
+        
+        # Add separator
+        tray_menu.addSeparator()
+        
+        # Exit action
         quit_action = tray_menu.addAction("Exit")
         quit_action.triggered.connect(self.quit_app)
         
         self.tray_icon.setContextMenu(tray_menu)
+        
+        # Connect double-click to show window
+        self.tray_icon.activated.connect(self.tray_icon_activated)
+        
+        # Show the tray icon
         self.tray_icon.show()
+        
+        # Set tooltip
+        self.tray_icon.setToolTip("AWS File Uploader")
+    
+    def tray_icon_activated(self, reason):
+        """Handle tray icon activation (clicks)"""
+        if reason == QSystemTrayIcon.DoubleClick:
+            self.show_from_tray()
+        elif reason == QSystemTrayIcon.Trigger:  # Single click on some systems
+            self.show_from_tray()
     
     def log_message(self, message):
         """Show only file upload/skipped and error messages in the log area, newest on top"""
@@ -1087,6 +1122,14 @@ class S3UploaderGUI(QMainWindow):
             # Auto-start the task immediately
             self.start_task(task)
             self.log_message(f"Task {task_id} started automatically")
+            
+            # Show tray notification for new task
+            self.tray_icon.showMessage(
+                "📤 New Upload Started",
+                f"Started uploading Order {task_data['order_number']}",
+                QSystemTrayIcon.Information,
+                3000
+            )
     
     def modify_selected_task(self):
         """Open dialog for modifying the selected task"""
@@ -1598,6 +1641,9 @@ class S3UploaderGUI(QMainWindow):
             # Update buttons
             self.update_buttons_state()
             
+            # Update system tray menu
+            self.update_tray_menu()
+            
         except Exception as e:
             self.log_message(f"Error starting task: {str(e)}")
             task['status'] = 'error'
@@ -1656,6 +1702,9 @@ class S3UploaderGUI(QMainWindow):
         if running_tasks:
             avg_progress = sum(t['progress'] for t in running_tasks) / len(running_tasks)
             self.progress_bar.setValue(round(avg_progress))
+        
+        # Update system tray menu
+        self.update_tray_menu()
     
     def _format_bytes(self, bytes_value):
         """Format bytes into human readable format"""
@@ -1714,6 +1763,9 @@ class S3UploaderGUI(QMainWindow):
         if all(t['status'] in ['completed', 'cancelled'] for t in self.upload_tasks):
             self.all_tasks_finished()
         
+        # Update system tray menu
+        self.update_tray_menu()
+        
         # Refresh the upload history
         self.load_upload_history()
     
@@ -1723,12 +1775,17 @@ class S3UploaderGUI(QMainWindow):
         self.cancel_btn.setEnabled(False)
         self.log_message("All upload tasks completed")
         
+        # Show enhanced tray notification
+        completed_count = len([t for t in self.upload_tasks if t['status'] == 'completed'])
         self.tray_icon.showMessage(
-            "All Uploads Complete",
-            "All file upload tasks completed successfully",
+            "🎉 All Uploads Complete!",
+            f"Successfully completed {completed_count} upload tasks",
             QSystemTrayIcon.Information,
-            2000
+            5000
         )
+        
+        # Update tray menu
+        self.update_tray_menu()
     
     def pause_selected_task(self):
         """
@@ -1773,6 +1830,9 @@ class S3UploaderGUI(QMainWindow):
         
         # Update buttons
         self.update_buttons_state()
+        
+        # Update system tray menu
+        self.update_tray_menu()
 
     def resume_selected_task(self):
         """
@@ -1815,6 +1875,9 @@ class S3UploaderGUI(QMainWindow):
         
         # Update buttons
         self.update_buttons_state()
+        
+        # Update system tray menu
+        self.update_tray_menu()
 
     def restart_selected_task(self):
         """
@@ -1932,6 +1995,9 @@ class S3UploaderGUI(QMainWindow):
         if all(t['status'] in ['completed', 'cancelled'] for t in self.upload_tasks):
             self.cancel_btn.setEnabled(False)
             
+        # Update system tray menu
+        self.update_tray_menu()
+    
     def delete_selected_task(self):
         """
         Delete the selected upload task from the list and optionally from the database
@@ -3991,3 +4057,80 @@ class S3UploaderGUI(QMainWindow):
             if self.safe_mode:
                 self.log_message("Creating mock AWS session for safe mode")
                 self.aws_session = type('MockSession', (), {'client': lambda *args, **kwargs: None})
+    
+    def closeEvent(self, event):
+        """
+        Handle window close event - minimize to tray instead of closing
+        """
+        if self.tray_icon.isVisible():
+            # Show notification about minimizing to tray
+            self.tray_icon.showMessage(
+                "AWS File Uploader",
+                "Application was minimized to tray. Click the tray icon to restore.",
+                QSystemTrayIcon.Information,
+                3000
+            )
+            
+            # Hide the window instead of closing
+            self.hide()
+            event.ignore()
+        else:
+            # If tray is not available, close normally
+            event.accept()
+    
+    def show_from_tray(self):
+        """Show the application window from system tray"""
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def update_tray_menu(self):
+        """Update the system tray menu with current upload status"""
+        if not hasattr(self, 'tray_icon') or not self.tray_icon:
+            return
+            
+        # Create new tray menu
+        tray_menu = QMenu()
+        
+        # Show/Hide action
+        show_action = tray_menu.addAction("Show")
+        show_action.triggered.connect(self.show_from_tray)
+        
+        # Add separator
+        tray_menu.addSeparator()
+        
+        # Upload status action (informational)
+        running_tasks = [t for t in self.upload_tasks if t.get('status') == 'running']
+        completed_tasks = [t for t in self.upload_tasks if t.get('status') == 'completed']
+        
+        if running_tasks:
+            status_text = f"🔄 {len(running_tasks)} uploads running"
+            if len(running_tasks) == 1:
+                # Show specific order for single task
+                task = running_tasks[0]
+                progress = int(task.get('progress', 0))
+                status_text = f"🔄 Order {task['order_number']} ({progress}%)"
+        elif completed_tasks:
+            status_text = f"✅ {len(completed_tasks)} uploads completed"
+        else:
+            status_text = "⏸️ No active uploads"
+            
+        status_action = tray_menu.addAction(status_text)
+        status_action.setEnabled(False)  # Make it non-clickable
+        
+        # Add separator
+        tray_menu.addSeparator()
+        
+        # Exit action
+        quit_action = tray_menu.addAction("Exit")
+        quit_action.triggered.connect(self.quit_app)
+        
+        # Update the tray menu
+        self.tray_icon.setContextMenu(tray_menu)
+        
+        # Update tooltip
+        if running_tasks:
+            tooltip = f"AWS File Uploader - {len(running_tasks)} uploads running"
+        else:
+            tooltip = "AWS File Uploader"
+        self.tray_icon.setToolTip(tooltip)
