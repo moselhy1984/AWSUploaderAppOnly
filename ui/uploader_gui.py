@@ -55,15 +55,16 @@ class S3UploaderGUI(QMainWindow):
         self.no_auto_login = no_auto_login
         
         # Get device info early
-        # Use the same MAC address format as in our check script
-        mac = ':'.join(['{:02x}'.format((uuid.getnode() >> elements) & 0xff) for elements in range(0,2*6,2)][::-1])
-        self.mac_address = mac.upper()
+        # Use getmac library for consistent MAC address format
+        self.mac_address = getmac.get_mac_address()
         
         device_info = self.db_manager.get_device_info_by_mac(self.mac_address)
         self.device_id = device_info['DeviceID'] if device_info else None
         self.device_name = device_info['DeviceName'] if device_info else None
         
         print(f"Device Name: {self.device_name}")
+        print(f"MAC Address: {self.mac_address}")
+        print(f"Device ID: {self.device_id}")
         
         # Set default application state
         self.upload_tasks = []
