@@ -11,6 +11,23 @@ from botocore.exceptions import ClientError
 from PyQt5.QtCore import QThread, pyqtSignal, QMutex, QMutexLocker
 import shutil
 
+class ProgressCallback:
+    """Callback class to track upload progress for individual files"""
+    def __init__(self, uploader, file_name, file_size):
+        self.uploader = uploader
+        self.file_name = file_name
+        self.file_size = file_size
+        self.bytes_transferred = 0
+        
+    def __call__(self, bytes_amount):
+        self.bytes_transferred += bytes_amount
+        # Emit progress for current file
+        if self.file_size > 0:
+            file_progress = min(100, (self.bytes_transferred / self.file_size) * 100)
+            # Only emit progress updates every 5% or for small files
+            if file_progress % 5 < 1 or self.file_size < 1024*1024:  # Every 5% or files < 1MB
+                self.uploader.log.emit(f"{self.file_name}: {file_progress:.1f}% uploaded")
+
 class BackgroundUploader(QThread):
     """
     Background thread for uploading files to S3 storage
@@ -43,6 +60,11 @@ class BackgroundUploader(QThread):
         self.current_file_index = 0  # Current file index for resuming
         self.all_files = []  # Store all files to be processed
         
+        # Progress tracking improvements
+        self.total_bytes = 0  # Total bytes to upload
+        self.uploaded_bytes = 0  # Bytes uploaded so far
+        self.current_file_bytes = 0  # Bytes of current file
+        
         # Create state directory if it doesn't exist
         self.state_dir = Path.home() / '.aws_uploader'
         self.state_dir.mkdir(exist_ok=True)
@@ -54,25 +76,40 @@ class BackgroundUploader(QThread):
         
     def pause(self):
         """Pause the upload process"""
-        # Using QMutexLocker for safe handling of shared variables
-        locker = QMutexLocker(self._pause_mutex)
-        self._is_paused = True
-        self.log.emit("Upload paused. Task will complete current file and then wait.")
-        # Save state when paused
-        self.save_state()
+        with QMutexLocker(self._pause_mutex):
+            self._is_paused = True
+            self.log.emit("Upload paused")
         
     def resume(self):
-        """Resume the paused upload process"""
-        # Using QMutexLocker for safe handling of shared variables
-        locker = QMutexLocker(self._pause_mutex)
-        self._is_paused = False
-        self.log.emit("Upload resumed.")
+        """Resume the upload process"""
+        with QMutexLocker(self._pause_mutex):
+            self._is_paused = False
+            self.log.emit("Upload resumed")
         
     def is_paused(self):
-        """Check if the uploader is paused"""
-        # Using QMutexLocker for safe handling of shared variables
-        locker = QMutexLocker(self._pause_mutex)
-        return self._is_paused
+        """Check if upload is paused"""
+        with QMutexLocker(self._pause_mutex):
+            return self._is_paused
+        
+    def emit_progress_update(self):
+        """Emit accurate progress based on uploaded files and bytes"""
+        if self.total_files == 0:
+            self.progress.emit(0, 1)
+            return
+            
+        # Calculate progress based on completed files + current file progress
+        completed_progress = self.uploaded_file_count + self.skipped_file_count
+        
+        # Add partial progress for current file if uploading
+        if self.current_file_bytes > 0 and self.total_bytes > 0:
+            current_file_progress = min(1.0, self.uploaded_bytes / self.total_bytes)
+            total_progress = completed_progress + current_file_progress
+        else:
+            total_progress = completed_progress
+            
+        # Emit progress as (completed_items, total_items)
+        progress_value = min(self.total_files, int(total_progress))
+        self.progress.emit(progress_value, self.total_files)
         
     def save_state(self):
         """Save the current upload state to a file"""
@@ -94,7 +131,10 @@ class BackgroundUploader(QThread):
                 'all_files': self._convert_paths_to_str(self.all_files[:1000] if len(self.all_files) > 1000 else self.all_files),
                 # Add timestamp for debugging
                 'last_saved': datetime.now().isoformat(),
-                'status': 'paused' if self._is_paused else 'running'
+                'status': 'paused' if self._is_paused else 'running',
+                'total_bytes': self.total_bytes,
+                'uploaded_bytes': self.uploaded_bytes,
+                'current_file_bytes': self.current_file_bytes
             }
             
             # Validate state before saving to prevent corrupted files
@@ -127,7 +167,10 @@ class BackgroundUploader(QThread):
                     'total_files': self.total_files,
                     'current_file_index': self.current_file_index,
                     'last_saved': datetime.now().isoformat(),
-                    'status': 'paused' if self._is_paused else 'running'
+                    'status': 'paused' if self._is_paused else 'running',
+                    'total_bytes': self.total_bytes,
+                    'uploaded_bytes': self.uploaded_bytes,
+                    'current_file_bytes': self.current_file_bytes
                 }
                 # Try again with simplified state
                 json_str = json.dumps(simplified_state, indent=2)
@@ -317,6 +360,11 @@ class BackgroundUploader(QThread):
                 self.log.emit("Warning: File list not found in state file")
                 self.all_files = []  # Will be reconstructed in run()
             
+            # Load total_bytes, uploaded_bytes, and current_file_bytes
+            self.total_bytes = max(0, state.get('total_bytes', 0))
+            self.uploaded_bytes = max(0, state.get('uploaded_bytes', 0))
+            self.current_file_bytes = max(0, state.get('current_file_bytes', 0))
+            
             self.log.emit(f"Upload state loaded for order {self.order_number} (index: {self.current_file_index+1}/{self.total_files})")
             return True
             
@@ -339,7 +387,7 @@ class BackgroundUploader(QThread):
         saved_state = self.load_state()
         if saved_state:
             # If we loaded the state, update our running vars and emit progress
-            self.progress.emit(self.current_file_index, self.total_files)
+            self.emit_progress_update()
             
         # First, determine if this is a mock session (for testing)
         is_mock_session = False
@@ -448,8 +496,7 @@ class BackgroundUploader(QThread):
                     self.uploaded_file_count = i
                     
                     # Emitir progreso
-                    progress = int((i / total_files) * 100)
-                    self.progress.emit(i, total_files)
+                    self.emit_progress_update()
                     
                     # Registrar archivo simulado
                     file_name = f"simulated_file_{i}.jpg"
@@ -460,7 +507,7 @@ class BackgroundUploader(QThread):
                 
                 # Simular carga completa
                 self.log.emit(f"Simulated upload successful to path: {base_prefix}")
-                self.progress.emit(total_files, total_files)
+                self.emit_progress_update()
                 
             else:
                 # Si tenemos una ruta de carpeta, simular la carga de múltiples archivos
@@ -498,8 +545,7 @@ class BackgroundUploader(QThread):
                     category = categories[i % len(categories)]
                     
                     # Emitir progreso
-                    progress = int((i / total_files) * 100)
-                    self.progress.emit(i, total_files)
+                    self.emit_progress_update()
                     
                     # Registrar archivo simulado
                     file_name = f"{category}/simulated_file_{i}.jpg"
@@ -510,7 +556,7 @@ class BackgroundUploader(QThread):
                 
                 # Simular carga completa
                 self.log.emit(f"Simulated upload successful to path: {base_prefix}")
-                self.progress.emit(total_files, total_files)
+                self.emit_progress_update()
             
             # Guardar el estado
             self.save_state()
@@ -630,96 +676,109 @@ class BackgroundUploader(QThread):
                 self.log.emit(f"AWS error: {str(e)}")
             return
             
-        # If we don't have files from a previous session or state couldn't be loaded, scan for files
-        if not self.all_files or len(self.all_files) == 0:
-            # Organize files by extension before uploading
-            self.log.emit("Organizing files by extension before upload...")
+        # If we don't have saved state, scan files and calculate totals
+        if not saved_state:
+            # Scan files and calculate total size
+            self.log.emit("Scanning files and calculating total size...")
+            
+            # Get all files to upload
             try:
-                self.organize_files_by_extension()
-            except Exception as e:
-                self.log.emit(f"Error organizing files: {str(e)}")
-                # Continue without organizing if there's an error
-            
-            # Process the local path folders to maintain the same structure
-            self.log.emit("Scanning local folders to maintain structure...")
-            
-            # Ensure folder_path and local_path are strings
-            folder_path = str(self.folder_path) if isinstance(self.folder_path, Path) else self.folder_path
-            local_path = str(self.local_path) if isinstance(self.local_path, Path) else self.local_path
-            
-            # Track all files to be uploaded
-            self.all_files = []
-            
-            # Process main categories (CR2, JPG, Reels/Videos)
-            categories = ["CR2", "JPG", "Reels/Videos", "OTHER"]
-            
-            for category in categories:
-                category_path = Path(local_path) / category
-                if not category_path.exists():
-                    self.log.emit(f"Category folder {category} doesn't exist, skipping.")
-                    continue
+                # Check if folder exists
+                if not Path(self.folder_path).exists():
+                    self.log.emit(f"Error: Folder does not exist: {self.folder_path}")
+                    return
                 
-                self.log.emit(f"Processing folder {category}...")
+                # Organize files by extension (this will also move loose files)
+                organized_files = self.organize_files_by_extension()
                 
-                # If it's a deep path like "Reels/Videos", handle properly
-                if "/" in category:
-                    parts = category.split("/")
-                    s3_category_prefix = "/".join(parts)
-                else:
-                    s3_category_prefix = category
+                # Check if we found any files
+                total_files_found = sum(len(files) for files in organized_files.values())
+                if total_files_found == 0:
+                    self.log.emit("⚠️  No files found for upload!")
+                    self.log.emit("📝 Possible reasons:")
+                    self.log.emit("   • Folder is empty")
+                    self.log.emit("   • All files are in Archive folder (ignored)")
+                    self.log.emit("   • Only system files present (.DS_Store, etc.)")
+                    self.log.emit("   • Files have unsupported extensions")
+                    
+                    # Still create empty task to avoid errors
+                    self.all_files = []
+                    self.total_files = 0
+                    self.total_bytes = 0
+                    self.uploaded_file_count = 0
+                    self.skipped_file_count = 0
+                    self.completed_files = []
+                    
+                    # Save state and finish
+                    self.save_state()
+                    self.finished.emit()
+                    return
                 
+                # Flatten the organized files into a single list
+                self.all_files = []
+                total_size = 0
+                
+                for category, files in organized_files.items():
+                    for file_info in files:
+                        self.all_files.append(file_info)
+                        total_size += file_info.get('size', 0)
+                
+                self.total_files = len(self.all_files)
+                self.total_bytes = total_size
+                
+                self.log.emit(f"✅ Ready to upload: {self.total_files} files ({self._format_bytes(self.total_bytes)} total)")
+                
+                # Get list of already uploaded files from database to optimize skipping
                 try:
-                    # Walk through all files in this category folder
-                    for file_path in category_path.rglob('*'):
-                        if not file_path.is_file() or not self._is_running:
-                            continue
+                    uploaded_files = self.get_uploaded_files(self.order_number)
+                    uploaded_file_keys = set(uploaded_files)
+                    
+                    if uploaded_file_keys:
+                        self.log.emit(f"🔄 Found {len(uploaded_file_keys)} files already uploaded in database")
                         
-                        # Calculate relative path from the category folder
-                        rel_path = file_path.relative_to(category_path)
+                        # Set completed files from previous uploads
+                        self.completed_files = list(uploaded_file_keys)
                         
-                        # S3 key preserves the folder structure
-                        s3_key = f"{base_prefix}/{s3_category_prefix}/{rel_path}"
+                        # Calculate bytes already uploaded
+                        uploaded_size = 0
+                        for file_info in self.all_files:
+                            if file_info['s3_key'] in uploaded_file_keys:
+                                uploaded_size += file_info.get('size', 0)
                         
-                        try:
-                            file_size = file_path.stat().st_size
-                            
-                            self.all_files.append({
-                                'local_path': str(file_path),  # Convert Path to string
-                                's3_key': s3_key,
-                                'size': file_size,
-                                'category': category
-                            })
-                        except Exception as file_err:
-                            self.log.emit(f"Error in file {file_path}: {str(file_err)}")
-                except Exception as category_err:
-                    self.log.emit(f"Error processing category {category}: {str(category_err)}")
-            
-            # Calculate total files and start uploading
-            self.total_files = len(self.all_files)
-            self.log.emit(f"Found {self.total_files} files to process")
-            
-            # Get list of already uploaded files from database to optimize skipping
-            try:
-                uploaded_files = self.get_uploaded_files(self.order_number)
-                uploaded_file_keys = set(uploaded_files)
+                        self.uploaded_bytes = uploaded_size
+                        self.log.emit(f"📊 Already uploaded: {self._format_bytes(uploaded_size)}")
+                        
+                        # Calculate remaining
+                        remaining_files = self.total_files - len(uploaded_file_keys)
+                        remaining_size = self.total_bytes - uploaded_size
+                        if remaining_files > 0:
+                            self.log.emit(f"⏳ Remaining: {remaining_files} files ({self._format_bytes(remaining_size)})")
+                    else:
+                        self.log.emit("🆕 No previous uploads found - starting fresh")
+                        self.completed_files = []
+                        self.uploaded_bytes = 0
+                    
+                except Exception as db_err:
+                    self.log.emit(f"⚠️  Error querying database: {str(db_err)}")
+                    self.completed_files = []
+                    self.uploaded_bytes = 0
                 
-                self.log.emit(f"Found {len(uploaded_file_keys)} files already uploaded in database")
+                # Reset counters for new uploads
+                self.current_file_index = 0
+                self.uploaded_file_count = len([f for f in self.all_files if f['s3_key'] in self.completed_files])
+                self.skipped_file_count = 0
                 
-                # Set completed files from previous uploads
-                self.completed_files = list(uploaded_file_keys)
-            except Exception as db_err:
-                self.log.emit(f"Error querying database: {str(db_err)}")
-                self.completed_files = []
-            
-            # Reset counters for new uploads
-            self.current_file_index = 0
-            self.uploaded_file_count = 0
-            self.skipped_file_count = 0
-            
-            # Save initial state
-            self.save_state()
+                # Save initial state
+                self.save_state()
+                
+            except Exception as scan_error:
+                self.log.emit(f"❌ Error scanning files: {str(scan_error)}")
+                import traceback
+                self.log.emit(traceback.format_exc())
+                return
         else:
-            self.log.emit(f"Resuming upload with {self.total_files} files, starting from file {self.current_file_index+1}")
+            self.log.emit(f"🔄 Resuming upload with {self.total_files} files ({self._format_bytes(self.total_bytes)} total)")
+            self.log.emit(f"📊 Progress: {self._format_bytes(self.uploaded_bytes)} / {self._format_bytes(self.total_bytes)} uploaded")
         
         # Initialize counters for resumed upload
         processed_files = self.current_file_index
@@ -728,7 +787,7 @@ class BackgroundUploader(QThread):
         uploaded_files_metadata = []  # to store uploaded files information to keep in the database
         
         # Update progress to show initial state
-        self.progress.emit(processed_files, self.total_files)
+        self.emit_progress_update()
         
         # Add safeguards to ensure valid indices
         if self.current_file_index >= len(self.all_files):
@@ -764,19 +823,8 @@ class BackgroundUploader(QThread):
                 s3_key = file_info['s3_key']
                 file_size = file_info['size']
                 
-                # Update progress - use index for file scanning, but add uploaded_file_count for actual uploads
-                # This way we can show both scanning progress and actual upload progress
-                if self.parent() and hasattr(self.parent(), 'toggle_progress_mode'):
-                    # If parent has a function to toggle between index and uploads, use that
-                    if uploaded_files > 0:
-                        # Once files start uploading, show upload count instead of index
-                        self.progress.emit(uploaded_files, self.total_files)
-                    else:
-                        # During initial scanning, show index
-                        self.progress.emit(i, self.total_files)
-                else:
-                    # Default behavior: show actual uploads
-                    self.progress.emit(uploaded_files, self.total_files)
+                # Set current file size for progress calculation
+                self.current_file_bytes = file_size
                 
                 # Check if file already uploaded
                 if s3_key in self.completed_files:
@@ -788,6 +836,8 @@ class BackgroundUploader(QThread):
                     self.log.emit(f"تم تخطي {Path(s3_key).name} (مرفوع سابقًا)")
                     skipped_files += 1
                     self.skipped_file_count = skipped_files
+                    # Update progress for skipped files
+                    self.emit_progress_update()
                     continue
                 
                 # Verify file still exists
@@ -796,6 +846,7 @@ class BackgroundUploader(QThread):
                     self.log.emit(f"Warning: File doesn't exist, skipping: {local_path}")
                     skipped_files += 1
                     self.skipped_file_count = skipped_files
+                    self.emit_progress_update()
                     continue
                 
                 # Upload the file to S3
@@ -804,11 +855,30 @@ class BackgroundUploader(QThread):
                     if Path(local_path).name == '.DS_Store':
                         uploaded_files += 1
                         self.uploaded_file_count = uploaded_files
+                        self.uploaded_bytes += file_size
+                        self.emit_progress_update()
                         continue
-                    self.log.emit(f"جارٍ رفع {Path(local_path).name} ({i+1}/{self.total_files})")
                     
-                    percent = int((i+1)/self.total_files*100) if self.total_files else 100
-                    self.log.emit(f"{Path(local_path).name} ({percent}%) - uploading")
+                    # Calculate overall progress percentage
+                    overall_progress = ((uploaded_files + skipped_files) / self.total_files) * 100 if self.total_files > 0 else 0
+                    bytes_progress = (self.uploaded_bytes / self.total_bytes) * 100 if self.total_bytes > 0 else 0
+                    
+                    # Get file info for better logging
+                    file_category = file_info.get('category', 'Unknown')
+                    file_extension = file_info.get('extension', Path(local_path).suffix.lower())
+                    original_location = file_info.get('original_location', 'unknown')
+                    
+                    location_emoji = "📁" if original_location == "organized" else "📄"
+                    category_emoji = {
+                        'CR2': '📷',
+                        'JPG': '🖼️', 
+                        'Reels/Videos': '🎬',
+                        'OTHER': '📄'
+                    }.get(file_category, '📄')
+                    
+                    self.log.emit(f"{location_emoji} جارٍ رفع {Path(local_path).name} ({uploaded_files + skipped_files + 1}/{self.total_files})")
+                    self.log.emit(f"   {category_emoji} النوع: {file_category} | الامتداد: {file_extension} | المصدر: {original_location}")
+                    self.log.emit(f"   📊 التقدم: {overall_progress:.1f}% ملفات، {bytes_progress:.1f}% بيانات")
                     
                     # Get file extension to determine content type
                     file_ext = Path(local_path).suffix.lower()
@@ -821,8 +891,13 @@ class BackgroundUploader(QThread):
                         content_type = 'image/png'
                     elif file_ext in ['.mp4', '.mov']:
                         content_type = 'video/mp4'
-                    elif file_ext in ['.cr2', '.cr3', '.raw']:
+                    elif file_ext in ['.cr2', '.cr3', '.raw', '.dng']:
                         content_type = 'image/x-canon-cr2'
+                    elif file_ext in ['.tif', '.tiff']:
+                        content_type = 'image/tiff'
+                    
+                    # Create progress callback for this file
+                    callback = ProgressCallback(self, Path(local_path).name, file_size)
                     
                     # Upload file to S3
                     s3.upload_file(
@@ -833,12 +908,13 @@ class BackgroundUploader(QThread):
                             'ContentType': content_type,
                             'ACL': 'private'
                         },
-                        Callback=lambda bytes_transferred: self.log.emit(f"Uploading {s3_key}: {bytes_transferred} bytes") if bytes_transferred % 10485760 == 0 else None
+                        Callback=callback
                     )
                     
                     # Update counters
                     uploaded_files += 1
                     self.uploaded_file_count = uploaded_files
+                    self.uploaded_bytes += file_size
                     
                     # Add file to completed files list
                     self.completed_files.append(s3_key)
@@ -853,15 +929,26 @@ class BackgroundUploader(QThread):
                         'status': 'completed'
                     })
                     
-                    self.log.emit(f"تم رفع {Path(s3_key).name} ({i+1}/{self.total_files})")
+                    # Emit progress update after successful upload
+                    self.emit_progress_update()
+                    
+                    # Calculate final progress percentages
+                    final_overall_progress = ((uploaded_files + skipped_files) / self.total_files) * 100 if self.total_files > 0 else 0
+                    final_bytes_progress = (self.uploaded_bytes / self.total_bytes) * 100 if self.total_bytes > 0 else 0
+                    
+                    self.log.emit(f"✅ تم رفع {Path(s3_key).name} بنجاح!")
+                    self.log.emit(f"   📈 التقدم الإجمالي: {final_overall_progress:.1f}% ملفات، {final_bytes_progress:.1f}% بيانات ({uploaded_files + skipped_files}/{self.total_files})")
+                    
                 except Exception as upload_error:
-                    self.log.emit(f"{Path(s3_key).name} - error: {str(upload_error)}")
+                    self.log.emit(f"❌ خطأ في رفع {Path(s3_key).name}: {str(upload_error)}")
                     skipped_files += 1
                     self.skipped_file_count = skipped_files
+                    self.emit_progress_update()
             except Exception as file_error:
                 self.log.emit(f"Error processing file at index {i}: {str(file_error)}")
                 skipped_files += 1
                 self.skipped_file_count = skipped_files
+                self.emit_progress_update()
                 continue
         
         # Final update of counters
@@ -921,6 +1008,46 @@ class BackgroundUploader(QThread):
                 self.log.emit(traceback.format_exc())
             
             if not self.is_paused():  # Only report completion if not paused
+                # Generate final upload report
+                self.log.emit("=" * 50)
+                self.log.emit("🎉 UPLOAD COMPLETED SUCCESSFULLY!")
+                self.log.emit("=" * 50)
+                
+                # Calculate statistics
+                total_processed = uploaded_files + skipped_files
+                upload_percentage = (uploaded_files / total_processed * 100) if total_processed > 0 else 0
+                
+                self.log.emit(f"📊 FINAL STATISTICS:")
+                self.log.emit(f"   ✅ Files uploaded: {uploaded_files}")
+                self.log.emit(f"   ⏭️  Files skipped: {skipped_files}")
+                self.log.emit(f"   📁 Total processed: {total_processed}")
+                self.log.emit(f"   📈 Upload rate: {upload_percentage:.1f}%")
+                self.log.emit(f"   💾 Data uploaded: {self._format_bytes(self.uploaded_bytes)}")
+                
+                # Show upload breakdown by category if available
+                if hasattr(self, 'all_files') and self.all_files:
+                    category_stats = {}
+                    for file_info in self.all_files:
+                        if file_info['s3_key'] in self.completed_files:
+                            category = file_info.get('category', 'OTHER')
+                            if category not in category_stats:
+                                category_stats[category] = {'count': 0, 'size': 0}
+                            category_stats[category]['count'] += 1
+                            category_stats[category]['size'] += file_info.get('size', 0)
+                    
+                    if category_stats:
+                        self.log.emit(f"\n📂 UPLOAD BREAKDOWN BY CATEGORY:")
+                        for category, stats in category_stats.items():
+                            emoji = {
+                                'CR2': '📷',
+                                'JPG': '🖼️', 
+                                'Reels/Videos': '🎬',
+                                'OTHER': '📄'
+                            }.get(category, '📄')
+                            self.log.emit(f"   {emoji} {category}: {stats['count']} files ({self._format_bytes(stats['size'])})")
+                
+                self.log.emit("=" * 50)
+                
                 self.log.emit(f"Upload complete. {uploaded_files} files uploaded, {skipped_files} files skipped.")
             else:
                 self.log.emit(f"Upload paused. {uploaded_files} files uploaded, {skipped_files} files skipped so far.")
@@ -1236,7 +1363,258 @@ class BackgroundUploader(QThread):
             return False
 
     def organize_files_by_extension(self):
-        """Organize files by extension into appropriate category folders"""
+        """Scan, organize, and return files by extension for upload"""
+        # Define extension mappings
+        extension_mappings = {
+            'CR2': ['.cr2', '.cr3', '.nef', '.arw', '.raw', '.dng'],  # Raw image files
+            'JPG': ['.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp', '.gif', '.heic', '.webp'],  # Image files
+            'Reels/Videos': ['.mp4', '.mov', '.avi', '.wmv', '.flv', '.m4v', '.mkv', '.webm', '.3gp'],  # Video files
+            'OTHER': []  # Default category for other types
+        }
+        
+        # Get base S3 prefix for this order
+        if hasattr(self.order_date, 'strftime'):
+            date_str = self.order_date.strftime('%Y-%m-%d')
+        elif hasattr(self.order_date, 'year'):
+            # Handle QDate objects
+            date_str = f"{self.order_date.year()}-{self.order_date.month():02d}-{self.order_date.day():02d}"
+        elif isinstance(self.order_date, str):
+            date_str = self.order_date
+        else:
+            date_str = str(self.order_date)
+        
+        base_prefix = f"uploads/{date_str}/Order_{self.order_number}"
+        
+        # Convert Path to string if needed
+        folder_path = self.folder_path
+        if isinstance(folder_path, Path):
+            folder_path = Path(folder_path)
+        else:
+            folder_path = Path(str(folder_path))
+            
+        self.log.emit(f"Scanning {folder_path} for files to organize and upload...")
+        
+        # Dictionary to store organized files by category
+        organized_files = {category: [] for category in extension_mappings.keys()}
+        
+        # Statistics for reporting
+        stats = {
+            'total_scanned': 0,
+            'organized_files': 0,
+            'skipped_archive': 0,
+            'skipped_system': 0,
+            'by_category': {category: 0 for category in extension_mappings.keys()}
+        }
+        
+        # First, organize loose files in the main directory
+        self.log.emit("Step 1: Organizing loose files by extension...")
+        loose_files_organized = self._organize_loose_files(folder_path, extension_mappings)
+        if loose_files_organized > 0:
+            self.log.emit(f"Organized {loose_files_organized} loose files into category folders")
+        
+        # Now scan all files (both organized and any remaining loose files)
+        self.log.emit("Step 2: Scanning all files for upload...")
+        
+        # Scan the entire folder structure
+        for file_path in folder_path.rglob('*'):
+            if not file_path.is_file() or not self._is_running:
+                continue
+            
+            stats['total_scanned'] += 1
+            
+            # Skip files in Archive folder
+            relative_path = file_path.relative_to(folder_path)
+            path_parts = relative_path.parts
+            if 'Archive' in path_parts or 'archive' in path_parts:
+                stats['skipped_archive'] += 1
+                continue
+            
+            # Skip system files
+            if file_path.name.startswith('.') or file_path.name in ['.DS_Store', 'Thumbs.db', 'desktop.ini']:
+                stats['skipped_system'] += 1
+                continue
+            
+            # Determine file category
+            file_extension = file_path.suffix.lower()
+            file_category = 'OTHER'  # Default
+            
+            for category, extensions in extension_mappings.items():
+                if file_extension in extensions:
+                    file_category = category
+                    break
+            
+            # Determine S3 key based on file location
+            if len(path_parts) > 1 and path_parts[0] in extension_mappings:
+                # File is already in a category folder
+                category_from_path = path_parts[0]
+                rel_path_in_category = Path(*path_parts[1:])
+                s3_category_prefix = category_from_path.replace('/', '_')  # Handle nested paths
+                s3_key = f"{base_prefix}/{s3_category_prefix}/{rel_path_in_category}"
+                actual_category = category_from_path
+            else:
+                # File is loose or in a non-category folder
+                s3_key = f"{base_prefix}/{file_category}/{relative_path}"
+                actual_category = file_category
+            
+            try:
+                file_size = file_path.stat().st_size
+                
+                file_info = {
+                    'local_path': str(file_path),
+                    's3_key': s3_key,
+                    'size': file_size,
+                    'category': actual_category,
+                    'extension': file_extension,
+                    'original_location': 'organized' if len(path_parts) > 1 and path_parts[0] in extension_mappings else 'loose'
+                }
+                
+                organized_files[actual_category].append(file_info)
+                stats['organized_files'] += 1
+                stats['by_category'][actual_category] += 1
+                
+            except Exception as file_err:
+                self.log.emit(f"Error processing file {file_path}: {str(file_err)}")
+        
+        # Generate detailed report
+        self._generate_scan_report(stats, organized_files)
+        
+        return organized_files
+    
+    def _organize_loose_files(self, folder_path, extension_mappings):
+        """Organize loose files in the main directory into category folders"""
+        organized_count = 0
+        
+        # Create category folders if they don't exist
+        for category in extension_mappings.keys():
+            category_path = folder_path / category
+            if "/" in category:
+                # Handle nested folders like "Reels/Videos"
+                category_parts = category.split("/")
+                current_path = folder_path
+                for part in category_parts:
+                    current_path = current_path / part
+                    if not current_path.exists():
+                        current_path.mkdir(exist_ok=True)
+                        self.log.emit(f"Created folder: {current_path}")
+            else:
+                if not category_path.exists():
+                    category_path.mkdir(exist_ok=True)
+                    self.log.emit(f"Created folder: {category_path}")
+        
+        # Create Archive folder if it doesn't exist
+        archive_path = folder_path / "Archive"
+        if not archive_path.exists():
+            archive_path.mkdir(exist_ok=True)
+            self.log.emit(f"Created Archive folder: {archive_path}")
+        
+        # Find loose files in the main directory (not in subdirectories)
+        loose_files = []
+        for item in folder_path.iterdir():
+            if item.is_file():
+                # Skip system files
+                if item.name.startswith('.') or item.name in ['.DS_Store', 'Thumbs.db', 'desktop.ini']:
+                    continue
+                loose_files.append(item)
+        
+        if not loose_files:
+            self.log.emit("No loose files found in main directory")
+            return 0
+        
+        self.log.emit(f"Found {len(loose_files)} loose files to organize")
+        
+        # Organize each loose file
+        for file_path in loose_files:
+            if not self._is_running:
+                break
+                
+            extension = file_path.suffix.lower()
+            
+            # Determine target category
+            target_category = 'OTHER'  # Default category
+            for category, extensions in extension_mappings.items():
+                if extension in extensions:
+                    target_category = category
+                    break
+            
+            # Create target path
+            if "/" in target_category:
+                # Handle nested category like "Reels/Videos"
+                target_folder = folder_path
+                for part in target_category.split('/'):
+                    target_folder = target_folder / part
+            else:
+                target_folder = folder_path / target_category
+            
+            # Create target filename
+            target_file = target_folder / file_path.name
+            
+            # Check if target file already exists
+            if target_file.exists():
+                self.log.emit(f"File already exists in {target_category}: {file_path.name}")
+                continue
+            
+            try:
+                # Move the file
+                shutil.move(str(file_path), str(target_file))
+                self.log.emit(f"Moved {file_path.name} → {target_category}/")
+                organized_count += 1
+            except Exception as e:
+                self.log.emit(f"Error moving {file_path.name}: {str(e)}")
+        
+        return organized_count
+    
+    def _generate_scan_report(self, stats, organized_files):
+        """Generate a detailed report of the scanning and organization process"""
+        self.log.emit("=" * 50)
+        self.log.emit("📊 SCAN AND ORGANIZATION REPORT")
+        self.log.emit("=" * 50)
+        
+        # Overall statistics
+        self.log.emit(f"📁 Total files scanned: {stats['total_scanned']}")
+        self.log.emit(f"✅ Files ready for upload: {stats['organized_files']}")
+        self.log.emit(f"🗃️ Files skipped (Archive): {stats['skipped_archive']}")
+        self.log.emit(f"🔧 System files skipped: {stats['skipped_system']}")
+        
+        self.log.emit("\n📋 FILES BY CATEGORY:")
+        total_size_by_category = {}
+        
+        for category, files in organized_files.items():
+            if files:
+                file_count = len(files)
+                total_size = sum(f['size'] for f in files)
+                total_size_by_category[category] = total_size
+                
+                # Count by original location
+                organized_count = len([f for f in files if f['original_location'] == 'organized'])
+                loose_count = len([f for f in files if f['original_location'] == 'loose'])
+                
+                self.log.emit(f"  📂 {category}: {file_count} files ({self._format_bytes(total_size)})")
+                if organized_count > 0 and loose_count > 0:
+                    self.log.emit(f"     └─ {organized_count} already organized, {loose_count} from loose files")
+                elif loose_count > 0:
+                    self.log.emit(f"     └─ {loose_count} organized from loose files")
+                
+                # Show file extensions in this category
+                extensions = set(f['extension'] for f in files if f['extension'])
+                if extensions:
+                    ext_list = sorted(list(extensions))
+                    self.log.emit(f"     └─ Extensions: {', '.join(ext_list)}")
+        
+        # Total size calculation
+        total_upload_size = sum(total_size_by_category.values())
+        self.log.emit(f"\n💾 Total upload size: {self._format_bytes(total_upload_size)}")
+        
+        # Upload strategy
+        self.log.emit("\n🚀 UPLOAD STRATEGY:")
+        self.log.emit("  • All files will be uploaded to S3 with organized folder structure")
+        self.log.emit("  • Archive folder contents are ignored")
+        self.log.emit("  • System files (.DS_Store, etc.) are skipped")
+        self.log.emit("  • Progress will be tracked per file and by data volume")
+        
+        self.log.emit("=" * 50)
+
+    def move_files_by_extension(self):
+        """Move files to appropriate category folders based on extension (separate from upload scanning)"""
         # Define extension mappings
         extension_mappings = {
             'CR2': ['.cr2', '.cr3', '.nef', '.arw', '.raw'],  # Raw image files
@@ -1245,7 +1623,6 @@ class BackgroundUploader(QThread):
             'OTHER': []  # Default category for other types
         }
         
-        # Get all files in the source folder and its subfolders
         # Convert Path to string if needed
         folder_path = self.folder_path
         if isinstance(folder_path, Path):
@@ -1254,7 +1631,7 @@ class BackgroundUploader(QThread):
             folder_path = Path(str(folder_path))
             
         total_moved = 0
-        self.log.emit(f"Scanning {folder_path} for files to organize...")
+        self.log.emit(f"Organizing files in {folder_path} by extension...")
         
         # Create category folders if they don't exist
         for category in extension_mappings.keys():
@@ -1323,3 +1700,14 @@ class BackgroundUploader(QThread):
                 self.log.emit(f"Error moving {file_path.name}: {str(e)}")
         
         self.log.emit(f"File organization complete: moved {total_moved} files to appropriate folders")
+
+    def _format_bytes(self, bytes_value):
+        """Format bytes into human readable format"""
+        if bytes_value < 1024:
+            return f"{bytes_value} B"
+        elif bytes_value < 1024 * 1024:
+            return f"{bytes_value / 1024:.1f} KB"
+        elif bytes_value < 1024 * 1024 * 1024:
+            return f"{bytes_value / (1024 * 1024):.1f} MB"
+        else:
+            return f"{bytes_value / (1024 * 1024 * 1024):.1f} GB"

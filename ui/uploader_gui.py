@@ -205,6 +205,18 @@ class S3UploaderGUI(QMainWindow):
         self.setWindowTitle('Secure File Uploader')
         self.setGeometry(100, 100, 800, 450)
         
+        # Set application icon
+        icon_path = os.path.join(os.path.dirname(__file__), '..', 'Uploadicon.ico')
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+        else:
+            # Try alternative path
+            icon_path = 'Uploadicon.ico'
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+            else:
+                print(f"Warning: Icon file not found at {icon_path}")
+        
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout()
@@ -922,11 +934,16 @@ class S3UploaderGUI(QMainWindow):
     def setup_tray(self):
         """Setup system tray icon and menu"""
         self.tray_icon = QSystemTrayIcon(self)
-        icon_path = os.path.join(os.path.dirname(__file__), '..', 'icon.ico')
+        icon_path = os.path.join(os.path.dirname(__file__), '..', 'Uploadicon.ico')
         if os.path.exists(icon_path):
             self.tray_icon.setIcon(QIcon(icon_path))
         else:
-            self.log_message(f"Warning: Icon file not found at {icon_path}")
+            # Try alternative path
+            icon_path = 'Uploadicon.ico'
+            if os.path.exists(icon_path):
+                self.tray_icon.setIcon(QIcon(icon_path))
+            else:
+                print(f"Warning: Icon file not found at {icon_path}")
         
         tray_menu = QMenu()
         show_action = tray_menu.addAction("Show")
@@ -1594,8 +1611,8 @@ class S3UploaderGUI(QMainWindow):
         
         Args:
             task_id (int): Task ID
-            current (int): Current progress
-            total (int): Total items
+            current (int): Current progress (files completed)
+            total (int): Total items (total files)
         """
         # Find the task
         task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
@@ -1605,41 +1622,51 @@ class S3UploaderGUI(QMainWindow):
         # Safety check for invalid values
         if total <= 0:
             self.log_message(f"Warning: Total value for task {task_id} is zero or negative: {total}")
-            # Set percentage to 0 or current value depending on current
-            if current <= 0:
-                percentage = 0
-            else:
-                # Keep previous percentage or set to some nominal value
-                percentage = task.get('progress', 0)
+            percentage = task.get('progress', 0)
         else:
-            # Calculate percentage based on progress mode
-            if hasattr(task, 'uploader') and task.get('uploader'):
-                uploader = task.get('uploader')
-                if self.progress_mode == 'upload' and hasattr(uploader, 'uploaded_file_count'):
-                    # Use actual uploaded files count for progress
-                    percentage = round((uploader.uploaded_file_count / total) * 100)
-                else:
-                    # Use current file index (scanning progress)
-                    percentage = round((current / total) * 100)
-            else:
-                # Fallback to standard calculation
-                percentage = round((current / total) * 100)
+            # Calculate percentage based on files completed
+            percentage = round((current / total) * 100)
         
         # Clamp percentage to valid range
         percentage = max(0, min(100, percentage))
         task['progress'] = percentage
         
+        # Get additional progress info from uploader if available
+        progress_details = ""
+        if hasattr(task, 'uploader') and task.get('uploader'):
+            uploader = task.get('uploader')
+            if hasattr(uploader, 'uploaded_file_count') and hasattr(uploader, 'total_files'):
+                files_progress = f"{uploader.uploaded_file_count + uploader.skipped_file_count}/{uploader.total_files}"
+                
+                # Add bytes progress if available
+                if hasattr(uploader, 'uploaded_bytes') and hasattr(uploader, 'total_bytes') and uploader.total_bytes > 0:
+                    bytes_percentage = (uploader.uploaded_bytes / uploader.total_bytes) * 100
+                    bytes_info = f"{self._format_bytes(uploader.uploaded_bytes)}/{self._format_bytes(uploader.total_bytes)}"
+                    progress_details = f" - {files_progress} files ({bytes_percentage:.1f}% data: {bytes_info})"
+                else:
+                    progress_details = f" - {files_progress} files"
+        
         # Update the list item if it exists
         if 'item' in task and task['item']:
-            # Display mode in the task text
-            mode_text = "uploading" if self.progress_mode == 'upload' else "scanning"
-            task['item'].setText(f"Task {task['id']}: Order {task['order_number']} - Running ({percentage}% {mode_text})")
+            status_text = "Uploading" if task['status'] == 'running' else task['status'].capitalize()
+            task['item'].setText(f"Task {task['id']}: Order {task['order_number']} - {status_text} ({percentage}%{progress_details})")
         
         # Update the main progress bar with average progress of all running tasks
         running_tasks = [t for t in self.upload_tasks if t['status'] == 'running']
         if running_tasks:
             avg_progress = sum(t['progress'] for t in running_tasks) / len(running_tasks)
             self.progress_bar.setValue(round(avg_progress))
+    
+    def _format_bytes(self, bytes_value):
+        """Format bytes into human readable format"""
+        if bytes_value < 1024:
+            return f"{bytes_value} B"
+        elif bytes_value < 1024 * 1024:
+            return f"{bytes_value / 1024:.1f} KB"
+        elif bytes_value < 1024 * 1024 * 1024:
+            return f"{bytes_value / (1024 * 1024):.1f} MB"
+        else:
+            return f"{bytes_value / (1024 * 1024 * 1024):.1f} GB"
     
     def log_task_message(self, task_id, message):
         """

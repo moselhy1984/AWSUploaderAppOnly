@@ -24,6 +24,16 @@ class SettingsDialog(QDialog):
         self.setModal(True)
         self.setFixedSize(500, 200)
         
+        # Set application icon
+        icon_path = os.path.join(os.path.dirname(__file__), '..', 'Uploadicon.ico')
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+        else:
+            # Try alternative path
+            icon_path = 'Uploadicon.ico'
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+        
         self.init_ui()
         self.load_current_settings()
     

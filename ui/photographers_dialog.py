@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import os
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                             QComboBox, QPushButton)
 
@@ -10,10 +11,22 @@ class PhotographersDialog(QDialog):
     """
     def __init__(self, photographers, parent=None):
         super().__init__(parent)
-        self.setWindowTitle('Select Photographers')
-        self.setFixedWidth(500)
-        
         self.photographers = photographers
+        
+        self.setWindowTitle("Select Photographers")
+        self.setFixedSize(400, 300)
+        
+        # Set application icon
+        icon_path = os.path.join(os.path.dirname(__file__), '..', 'Uploadicon.ico')
+        if os.path.exists(icon_path):
+            from PyQt5.QtGui import QIcon
+            self.setWindowIcon(QIcon(icon_path))
+        else:
+            # Try alternative path
+            icon_path = 'Uploadicon.ico'
+            if os.path.exists(icon_path):
+                from PyQt5.QtGui import QIcon
+                self.setWindowIcon(QIcon(icon_path))
         
         layout = QVBoxLayout()
         

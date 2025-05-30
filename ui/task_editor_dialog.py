@@ -67,6 +67,18 @@ class TaskEditorDialog(QDialog):
         else:
             self.setWindowTitle("Add New Upload Task")
             
+        # Set application icon
+        icon_path = os.path.join(os.path.dirname(__file__), '..', 'Uploadicon.ico')
+        if os.path.exists(icon_path):
+            from PyQt5.QtGui import QIcon
+            self.setWindowIcon(QIcon(icon_path))
+        else:
+            # Try alternative path
+            icon_path = 'Uploadicon.ico'
+            if os.path.exists(icon_path):
+                from PyQt5.QtGui import QIcon
+                self.setWindowIcon(QIcon(icon_path))
+            
         self.setMinimumWidth(600)
         self.setMinimumHeight(400)
         
@@ -361,16 +373,33 @@ class TaskEditorDialog(QDialog):
         # Create folder structure: base_path/YYYY/MM-YYYY/DD-MM-YYYY/Order_XXXXXX
         base_path = Path(self.local_storage_path) / str(year) / month / day / f"Order_{order_number}"
         
-        # Create the main folders
+        # Create the main folders including Archive
         folders = [
             base_path / "CR2",
             base_path / "JPG", 
             base_path / "Reels/Videos",
-            base_path / "OTHER"
+            base_path / "OTHER",
+            base_path / "Archive"  # إضافة مجلد Archive
         ]
         
+        created_folders = []
         for folder in folders:
-            folder.mkdir(parents=True, exist_ok=True)
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+                created_folders.append(str(folder))
+                print(f"Created folder: {folder}")
+            except Exception as e:
+                print(f"Error creating folder {folder}: {str(e)}")
+        
+        # Log the created folder structure
+        if created_folders:
+            print(f"Created full path: {base_path}")
+            print(f"Created {len(created_folders)} category folders:")
+            for folder_path in created_folders:
+                folder_name = Path(folder_path).name
+                if folder_name == "Videos":
+                    folder_name = "Reels/Videos"
+                print(f"  📁 {folder_name}")
         
         return base_path
     

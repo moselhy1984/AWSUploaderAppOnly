@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QWidget, QLabel, QPushButton,
                             QScrollArea, QGridLayout, QFrame, QTextEdit)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
+import os
 
 class ImagePreviewDialog(QDialog):
     """
@@ -18,6 +19,18 @@ class ImagePreviewDialog(QDialog):
         self.setFixedSize(800, 600)
         self.order_number = order_number
         self.parent = parent
+        
+        # Set application icon
+        icon_path = os.path.join(os.path.dirname(__file__), '..', 'Uploadicon.ico')
+        if os.path.exists(icon_path):
+            from PyQt5.QtGui import QIcon
+            self.setWindowIcon(QIcon(icon_path))
+        else:
+            # Try alternative path
+            icon_path = 'Uploadicon.ico'
+            if os.path.exists(icon_path):
+                from PyQt5.QtGui import QIcon
+                self.setWindowIcon(QIcon(icon_path))
         
         # Main layout
         layout = QVBoxLayout()

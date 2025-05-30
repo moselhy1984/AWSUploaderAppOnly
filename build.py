@@ -13,8 +13,8 @@ def build_executable():
         print("Installing PyInstaller...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "PyInstaller"])
     
-    # Determine the icon file based on platform
-    icon_file = "icon.ico" if platform.system() == "Windows" else "icon.png"
+    # Use the new upload icon
+    icon_file = "Uploadicon.ico"
     
     # Build command
     cmd = [
