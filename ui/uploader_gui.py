@@ -2499,7 +2499,7 @@ class S3UploaderGUI(QMainWindow):
             return None
     
     def load_tasks_from_database(self):
-        """Load tasks from database"""
+        """Load tasks from database - only this device's incomplete tasks and today's completed tasks"""
         if not self.db_manager:
                 return
                 
@@ -2515,7 +2515,13 @@ class S3UploaderGUI(QMainWindow):
             
         try:
             with self.db_manager.connection.cursor(dictionary=True) as cursor:
-                # Query for incomplete tasks and completed tasks in the last 24 hours
+                # Get today's date for filtering completed tasks
+                from datetime import datetime
+                today = datetime.now().strftime("%Y-%m-%d")
+                
+                # Query for:
+                # 1. Incomplete tasks (pending, running, paused) for this device
+                # 2. Tasks completed today for this device
                 query = """
                 SELECT t.task_id, t.order_number, t.status, t.progress, 
                        t.created_at, t.completed_timestamp, t.folder_path, t.local_path,
@@ -2523,7 +2529,12 @@ class S3UploaderGUI(QMainWindow):
                        t.order_date, t.DeviceID, d.DeviceName
                 FROM upload_tasks t
                 LEFT JOIN devices d ON t.DeviceID = d.DeviceID
-                WHERE t.DeviceID = %s
+                WHERE t.DeviceID = %s 
+                AND (
+                    t.status IN ('pending', 'running', 'paused') 
+                    OR 
+                    (t.status = 'completed' AND DATE(t.completed_timestamp) = %s)
+                )
                 ORDER BY 
                     CASE 
                         WHEN t.status = 'running' THEN 1
@@ -2535,12 +2546,15 @@ class S3UploaderGUI(QMainWindow):
                     t.created_at DESC
                 """
                 
-                # Execute query
-                cursor.execute(query, (self.device_id,))
+                # Execute query with device ID and today's date
+                cursor.execute(query, (self.device_id, today))
                 results = cursor.fetchall()
                 
                 if not results:
+                    print(f"No tasks found for device {self.device_name} (ID: {self.device_id})")
                     return
+                
+                print(f"Found {len(results)} tasks for device {self.device_name}")
                 
                 for db_task in results:
                     # Skip tasks that are already in the list
@@ -2586,7 +2600,18 @@ class S3UploaderGUI(QMainWindow):
                     from PyQt5.QtCore import Qt
                     
                     task_item = QListWidgetItem()
-                    task_item.setText(f"Task {task_id}: Order {task['order_number']} - {task['status'].capitalize()}")
+                    
+                    # Show status with date for completed tasks
+                    if task['status'] == 'completed':
+                        completed_date = db_task.get('completed_timestamp')
+                        if completed_date:
+                            date_str = completed_date.strftime("%H:%M") if hasattr(completed_date, 'strftime') else str(completed_date)
+                            task_item.setText(f"Task {task_id}: Order {task['order_number']} - Completed ({date_str})")
+                        else:
+                            task_item.setText(f"Task {task_id}: Order {task['order_number']} - Completed (Today)")
+                    else:
+                        task_item.setText(f"Task {task_id}: Order {task['order_number']} - {task['status'].capitalize()}")
+                    
                     task_item.setData(Qt.UserRole, task_id)
                     
                     # Add item to task
@@ -2599,7 +2624,12 @@ class S3UploaderGUI(QMainWindow):
                     self.upload_tasks.append(task)
                 
                 if self.upload_tasks:
-                    print(f"Loaded {len(self.upload_tasks)} tasks from database")
+                    incomplete_count = len([t for t in self.upload_tasks if t['status'] in ['pending', 'running', 'paused']])
+                    completed_today_count = len([t for t in self.upload_tasks if t['status'] == 'completed'])
+                    
+                    print(f"Loaded {len(self.upload_tasks)} tasks from database:")
+                    print(f"  - {incomplete_count} incomplete tasks")
+                    print(f"  - {completed_today_count} completed today")
                     
                     # Auto-start pending tasks
                     pending_tasks = [task for task in self.upload_tasks if task['status'] == 'pending']
