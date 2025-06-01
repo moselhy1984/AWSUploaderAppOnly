@@ -611,47 +611,11 @@ class BackgroundUploader(QThread):
             self.log.emit("Please check your AWS configuration and try again.")
             return
         
-        # Prepare path structure
+        # Create S3 path structure based on local folder structure
         try:
-            # Handle both string and datetime objects for order_date
-            if isinstance(self.order_date, str):
-                try:
-                    # Try different date formats
-                    if 'T' in self.order_date:
-                        # ISO format with time
-                        order_date_obj = datetime.fromisoformat(self.order_date.replace('Z', '+00:00'))
-                    elif '-' in self.order_date:
-                        # Date format YYYY-MM-DD
-                        order_date_obj = datetime.strptime(self.order_date, '%Y-%m-%d')
-                    else:
-                        # Use current date as fallback
-                        order_date_obj = datetime.now()
-                except:
-                    # Use current date as fallback
-                    order_date_obj = datetime.now()
-            elif hasattr(self.order_date, 'year') and hasattr(self.order_date, 'month') and hasattr(self.order_date, 'day'):
-                # Handle QDate objects
-                try:
-                    if hasattr(self.order_date, 'toPython'):
-                        # QDate object
-                        order_date_obj = datetime.combine(self.order_date.toPython(), datetime.min.time())
-                    else:
-                        # datetime.date object
-                        order_date_obj = datetime.combine(self.order_date, datetime.min.time())
-                except:
-                    # Use current date as fallback
-                    order_date_obj = datetime.now()
-            else:
-                # Assume it's already a datetime object or use current date
-                try:
-                    order_date_obj = self.order_date if hasattr(self.order_date, 'year') else datetime.now()
-                except:
-                    order_date_obj = datetime.now()
-            
-            year = order_date_obj.year
-            month = f"{order_date_obj.month:02d}-{year}"
-            day = f"{order_date_obj.day:02d}-{order_date_obj.month:02d}-{year}"
-            base_prefix = f"{year}/{month}/{day}/Order_{self.order_number}"
+            # Get base S3 prefix using local path structure
+            base_prefix = self.get_local_path_structure()
+            self.log.emit(f"🗂️ S3 upload path: {base_prefix}")
         except Exception as e:
             self.log.emit(f"Error creating path structure: {str(e)}")
             # Use fallback path structure with current date
@@ -1372,18 +1336,8 @@ class BackgroundUploader(QThread):
             'OTHER': []  # Default category for other types
         }
         
-        # Get base S3 prefix for this order
-        if hasattr(self.order_date, 'strftime'):
-            date_str = self.order_date.strftime('%Y-%m-%d')
-        elif hasattr(self.order_date, 'year'):
-            # Handle QDate objects
-            date_str = f"{self.order_date.year()}-{self.order_date.month():02d}-{self.order_date.day():02d}"
-        elif isinstance(self.order_date, str):
-            date_str = self.order_date
-        else:
-            date_str = str(self.order_date)
-        
-        base_prefix = f"uploads/{date_str}/Order_{self.order_number}"
+        # Get base S3 prefix using local path structure
+        base_prefix = self.get_local_path_structure()
         
         # Convert Path to string if needed
         folder_path = self.folder_path
@@ -1711,3 +1665,75 @@ class BackgroundUploader(QThread):
             return f"{bytes_value / (1024 * 1024):.1f} MB"
         else:
             return f"{bytes_value / (1024 * 1024 * 1024):.1f} GB"
+
+    def get_local_path_structure(self):
+        """
+        Extract the local path structure to replicate it on S3
+        Starting from the year folder instead of Booking_Folders
+        
+        Returns:
+            str: The relative path structure to use as S3 prefix
+        """
+        try:
+            # Get the local folder path
+            folder_path = Path(self.folder_path)
+            
+            # Look for common patterns in the path structure
+            path_parts = folder_path.parts
+            
+            # Find the year folder (4-digit number starting with 20xx)
+            year_folder_index = -1
+            for i, part in enumerate(path_parts):
+                # Check if this part looks like a year (4 digits starting with 20)
+                if part.isdigit() and len(part) == 4 and part.startswith('20'):
+                    year_folder_index = i
+                    break
+            
+            if year_folder_index >= 0:
+                # Extract the path from the year folder onwards
+                relative_structure = Path(*path_parts[year_folder_index:])
+                self.log.emit(f"📁 Using year-based structure: {relative_structure}")
+                return str(relative_structure)
+            else:
+                # Fallback: look for the base folder pattern and then find year
+                base_folder_index = -1
+                for i, part in enumerate(path_parts):
+                    if 'booking' in part.lower() or 'folders' in part.lower() or 'orders' in part.lower():
+                        base_folder_index = i
+                        break
+                
+                if base_folder_index >= 0:
+                    # Look for year folder after base folder
+                    for i in range(base_folder_index + 1, len(path_parts)):
+                        part = path_parts[i]
+                        if part.isdigit() and len(part) == 4 and part.startswith('20'):
+                            relative_structure = Path(*path_parts[i:])
+                            self.log.emit(f"📁 Found year folder, using: {relative_structure}")
+                            return str(relative_structure)
+                
+                # If no year found in expected location, try pattern matching
+                folder_name = folder_path.name
+                parent_folder = folder_path.parent.name
+                grandparent_folder = folder_path.parent.parent.name
+                
+                # Check if grandparent looks like a year
+                if grandparent_folder.isdigit() and len(grandparent_folder) == 4 and grandparent_folder.startswith('20'):
+                    relative_structure = Path(grandparent_folder) / parent_folder / folder_name
+                    self.log.emit(f"📁 Detected year structure: {relative_structure}")
+                    return str(relative_structure)
+                
+                # Check if parent looks like a year
+                elif parent_folder.isdigit() and len(parent_folder) == 4 and parent_folder.startswith('20'):
+                    relative_structure = Path(parent_folder) / folder_name
+                    self.log.emit(f"📁 Detected year structure: {relative_structure}")
+                    return str(relative_structure)
+                
+                else:
+                    # Ultimate fallback: use just the order folder
+                    self.log.emit(f"📁 No year found, using order folder only: {folder_name}")
+                    return folder_name
+                    
+        except Exception as e:
+            self.log.emit(f"⚠️ Error extracting local path structure: {str(e)}")
+            # Ultimate fallback
+            return f"Order_{self.order_number}"
