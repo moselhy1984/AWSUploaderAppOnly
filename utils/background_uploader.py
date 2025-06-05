@@ -613,9 +613,33 @@ class BackgroundUploader(QThread):
         
         # Create S3 path structure based on local folder structure
         try:
-            # Get base S3 prefix using local path structure
-            base_prefix = self.get_local_path_structure()
-            self.log.emit(f"🗂️ S3 upload path: {base_prefix}")
+            # Get all files to upload
+            try:
+                # Use local_path if available, otherwise fallback to folder_path
+                search_path = self.local_path if self.local_path else self.folder_path
+                
+                # Check if search path exists
+                if not Path(search_path).exists():
+                    self.log.emit(f"Error: Search path does not exist: {search_path}")
+                    self.log.emit(f"🔍 Checked paths:")
+                    self.log.emit(f"   • local_path: {self.local_path}")
+                    self.log.emit(f"   • folder_path: {self.folder_path}")
+                    return
+                
+                self.log.emit(f"🔍 Searching for files in: {search_path}")
+                
+                # Temporarily update folder_path for organize_files_by_extension
+                original_folder_path = self.folder_path
+                self.folder_path = search_path
+                
+                # Organize files by extension (this will also move loose files)
+                organized_files = self.organize_files_by_extension()
+                
+                # Restore original folder_path
+                self.folder_path = original_folder_path
+            except Exception as e:
+                self.log.emit(f"Error organizing files: {str(e)}")
+                return
         except Exception as e:
             self.log.emit(f"Error creating path structure: {str(e)}")
             # Use fallback path structure with current date
@@ -647,102 +671,115 @@ class BackgroundUploader(QThread):
             
             # Get all files to upload
             try:
-                # Check if folder exists
-                if not Path(self.folder_path).exists():
-                    self.log.emit(f"Error: Folder does not exist: {self.folder_path}")
+                # Use local_path if available, otherwise fallback to folder_path
+                search_path = self.local_path if self.local_path else self.folder_path
+                
+                # Check if search path exists
+                if not Path(search_path).exists():
+                    self.log.emit(f"Error: Search path does not exist: {search_path}")
+                    self.log.emit(f"🔍 Checked paths:")
+                    self.log.emit(f"   • local_path: {self.local_path}")
+                    self.log.emit(f"   • folder_path: {self.folder_path}")
                     return
+                
+                self.log.emit(f"🔍 Searching for files in: {search_path}")
+                
+                # Temporarily update folder_path for organize_files_by_extension
+                original_folder_path = self.folder_path
+                self.folder_path = search_path
                 
                 # Organize files by extension (this will also move loose files)
                 organized_files = self.organize_files_by_extension()
                 
-                # Check if we found any files
-                total_files_found = sum(len(files) for files in organized_files.values())
-                if total_files_found == 0:
-                    self.log.emit("⚠️  No files found for upload!")
-                    self.log.emit("📝 Possible reasons:")
-                    self.log.emit("   • Folder is empty")
-                    self.log.emit("   • All files are in Archive folder (ignored)")
-                    self.log.emit("   • Only system files present (.DS_Store, etc.)")
-                    self.log.emit("   • Files have unsupported extensions")
-                    
-                    # Still create empty task to avoid errors
-                    self.all_files = []
-                    self.total_files = 0
-                    self.total_bytes = 0
-                    self.uploaded_file_count = 0
-                    self.skipped_file_count = 0
-                    self.completed_files = []
-                    
-                    # Save state and finish
-                    self.save_state()
-                    self.finished.emit()
-                    return
+                # Restore original folder_path
+                self.folder_path = original_folder_path
+            except Exception as e:
+                self.log.emit(f"Error organizing files: {str(e)}")
+                return
+            
+            # Check if we found any files
+            total_files_found = sum(len(files) for files in organized_files.values())
+            if total_files_found == 0:
+                self.log.emit("⚠️  No files found for upload!")
+                self.log.emit("📝 Possible reasons:")
+                self.log.emit("   • Folder is empty")
+                self.log.emit("   • All files are in Archive folder (ignored)")
+                self.log.emit("   • Only system files present (.DS_Store, etc.)")
+                self.log.emit("   • Files have unsupported extensions")
                 
-                # Flatten the organized files into a single list
+                # Still create empty task to avoid errors
                 self.all_files = []
-                total_size = 0
+                self.total_files = 0
+                self.total_bytes = 0
+                self.uploaded_file_count = 0
+                self.skipped_file_count = 0
+                self.completed_files = []
                 
-                for category, files in organized_files.items():
-                    for file_info in files:
-                        self.all_files.append(file_info)
-                        total_size += file_info.get('size', 0)
+                # Save state and finish
+                self.save_state()
+                self.finished.emit()
+                return
+            
+            # Flatten the organized files into a single list
+            self.all_files = []
+            total_size = 0
+            
+            for category, files in organized_files.items():
+                for file_info in files:
+                    self.all_files.append(file_info)
+                    total_size += file_info.get('size', 0)
+            
+            self.total_files = len(self.all_files)
+            self.total_bytes = total_size
+            
+            self.log.emit(f"✅ Ready to upload: {self.total_files} files ({self._format_bytes(self.total_bytes)} total)")
+            
+            # Get list of already uploaded files from database to optimize skipping
+            try:
+                uploaded_files = self.get_uploaded_files(self.order_number)
+                uploaded_file_keys = set(uploaded_files)
                 
-                self.total_files = len(self.all_files)
-                self.total_bytes = total_size
-                
-                self.log.emit(f"✅ Ready to upload: {self.total_files} files ({self._format_bytes(self.total_bytes)} total)")
-                
-                # Get list of already uploaded files from database to optimize skipping
-                try:
-                    uploaded_files = self.get_uploaded_files(self.order_number)
-                    uploaded_file_keys = set(uploaded_files)
+                if uploaded_file_keys:
+                    self.log.emit(f"🔄 Found {len(uploaded_file_keys)} files already uploaded in database")
                     
-                    if uploaded_file_keys:
-                        self.log.emit(f"🔄 Found {len(uploaded_file_keys)} files already uploaded in database")
-                        
-                        # Set completed files from previous uploads
-                        self.completed_files = list(uploaded_file_keys)
-                        
-                        # Calculate bytes already uploaded
-                        uploaded_size = 0
-                        for file_info in self.all_files:
-                            if file_info['s3_key'] in uploaded_file_keys:
-                                uploaded_size += file_info.get('size', 0)
-                        
-                        self.uploaded_bytes = uploaded_size
-                        self.log.emit(f"📊 Already uploaded: {self._format_bytes(uploaded_size)}")
-                        
-                        # Calculate remaining
-                        remaining_files = self.total_files - len(uploaded_file_keys)
-                        remaining_size = self.total_bytes - uploaded_size
-                        if remaining_files > 0:
-                            self.log.emit(f"⏳ Remaining: {remaining_files} files ({self._format_bytes(remaining_size)})")
-                    else:
-                        self.log.emit("🆕 No previous uploads found - starting fresh")
-                        self.completed_files = []
-                        self.uploaded_bytes = 0
+                    # Set completed files from previous uploads
+                    self.completed_files = list(uploaded_file_keys)
                     
-                except Exception as db_err:
-                    self.log.emit(f"⚠️  Error querying database: {str(db_err)}")
+                    # Calculate bytes already uploaded
+                    uploaded_size = 0
+                    for file_info in self.all_files:
+                        if file_info['s3_key'] in uploaded_file_keys:
+                            uploaded_size += file_info.get('size', 0)
+                    
+                    self.uploaded_bytes = uploaded_size
+                    self.log.emit(f"📊 Already uploaded: {self._format_bytes(uploaded_size)}")
+                    
+                    # Calculate remaining
+                    remaining_files = self.total_files - len(uploaded_file_keys)
+                    remaining_size = self.total_bytes - uploaded_size
+                    if remaining_files > 0:
+                        self.log.emit(f"⏳ Remaining: {remaining_files} files ({self._format_bytes(remaining_size)})")
+                else:
+                    self.log.emit("🆕 No previous uploads found - starting fresh")
                     self.completed_files = []
                     self.uploaded_bytes = 0
                 
-                # Reset counters for new uploads
-                self.current_file_index = 0
-                self.uploaded_file_count = len([f for f in self.all_files if f['s3_key'] in self.completed_files])
-                self.skipped_file_count = 0
-                
-                # Save initial state
-                self.save_state()
-                
-            except Exception as scan_error:
-                self.log.emit(f"❌ Error scanning files: {str(scan_error)}")
-                import traceback
-                self.log.emit(traceback.format_exc())
-                return
-        else:
-            self.log.emit(f"🔄 Resuming upload with {self.total_files} files ({self._format_bytes(self.total_bytes)} total)")
-            self.log.emit(f"📊 Progress: {self._format_bytes(self.uploaded_bytes)} / {self._format_bytes(self.total_bytes)} uploaded")
+            except Exception as db_err:
+                self.log.emit(f"⚠️  Error querying database for uploaded files: {str(db_err)}")
+                # If database query fails, assume this is a fresh upload
+                self.log.emit("📄 Assuming fresh upload due to database error")
+                self.completed_files = []
+                self.uploaded_bytes = 0
+            
+            # Reset counters for new uploads
+            self.current_file_index = 0
+            self.uploaded_file_count = len([f for f in self.all_files if f['s3_key'] in self.completed_files])
+            self.skipped_file_count = 0
+            
+            # Save initial state
+            self.save_state()
+            
+            return
         
         # Initialize counters for resumed upload
         processed_files = self.current_file_index
@@ -1017,130 +1054,6 @@ class BackgroundUploader(QThread):
                 self.log.emit(f"Upload paused. {uploaded_files} files uploaded, {skipped_files} files skipped so far.")
         
         self.finished.emit()
-    
-    def get_uploaded_files(self, order_number):
-        """
-        Get list of already uploaded files for this order
-        
-        Args:
-            order_number (str): Order number to check
-            
-        Returns:
-            list: List of S3 keys for files already uploaded
-        """
-        parent = self.parent()
-        if not parent or not hasattr(parent, 'db_manager'):
-            return []
-        
-        db_manager = parent.db_manager
-        is_connected = False
-        try:
-            is_connected = db_manager.connection and db_manager.connection.is_connected()
-        except Exception:
-            is_connected = False
-            
-        if not is_connected:
-            db_manager.connect()
-        
-        cursor = None
-        files = []
-        
-        try:
-            cursor = db_manager.connection.cursor(dictionary=True)
-            
-            # Check if the upload_files table exists
-            check_query = """
-            SELECT COUNT(*) as table_exists 
-            FROM information_schema.TABLES 
-            WHERE TABLE_SCHEMA = %s 
-            AND TABLE_NAME = 'upload_files'
-            """
-            cursor.execute(check_query, (db_manager.rds_config['database'],))
-            result = cursor.fetchone()
-            
-            if result and result['table_exists'] == 0:
-                # Table doesn't exist yet
-                self.log.emit("Creating upload_files table for tracking individual files...")
-                
-                create_table_query = """
-                CREATE TABLE upload_files (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    order_number VARCHAR(50) NOT NULL,
-                    s3_key VARCHAR(1024) NOT NULL,
-                    file_name VARCHAR(255) NOT NULL,
-                    file_size BIGINT NOT NULL,
-                    file_type VARCHAR(50) NOT NULL,
-                    upload_status VARCHAR(20) NOT NULL,
-                    upload_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-                cursor.execute(create_table_query)
-                db_manager.connection.commit()
-                self.log.emit("Created upload_files table")
-                return []
-            
-            # Get all files already uploaded for this order
-            query = """
-            SELECT s3_key
-            FROM upload_files
-            WHERE order_number = %s
-            """
-            cursor.execute(query, (order_number,))
-            files = cursor.fetchall()
-            
-            return [file['s3_key'] for file in files] if files else []
-            
-        except Exception as e:
-            self.log.emit(f"Error checking uploaded files: {e}")
-            return []
-        finally:
-            if cursor:
-                cursor.close()
-    
-    def check_existing_upload(self, db_manager, order_number):
-        """
-        Check if there's already an upload record for this order
-        
-        Args:
-            db_manager: Database manager instance
-            order_number (str): Order number to check
-            
-        Returns:
-            dict or None: Existing upload record if found, None otherwise
-        """
-        try:
-            # Create a new connection for this thread if needed
-            is_connected = False
-            try:
-                is_connected = db_manager.connection and db_manager.connection.is_connected()
-            except Exception:
-                is_connected = False
-                
-            if not is_connected:
-                # Create a fresh connection to avoid conflict with other threads
-                db_manager.connect()
-                
-            cursor = None
-            result = None
-            
-            try:
-                cursor = db_manager.connection.cursor(dictionary=True)
-                query = """
-                SELECT upload_id, file_count
-                FROM uploads
-                WHERE order_number = %s
-                """
-                cursor.execute(query, (order_number,))
-                result = cursor.fetchone()
-            finally:
-                if cursor:
-                    cursor.close()
-            
-            return result
-            
-        except Exception as e:
-            self.log.emit(f"Error checking existing upload: {e}")
-            return None
     
     def update_upload_record(self, db_manager, existing_record, new_files, main_id, assistant_id, video_id):
         """
@@ -1737,3 +1650,116 @@ class BackgroundUploader(QThread):
             self.log.emit(f"⚠️ Error extracting local path structure: {str(e)}")
             # Ultimate fallback
             return f"Order_{self.order_number}"
+
+    def get_uploaded_files(self, order_number):
+        """
+        Get list of already uploaded files for this order
+        
+        Args:
+            order_number (str): Order number to check
+            
+        Returns:
+            list: List of S3 keys for files already uploaded
+        """
+        parent = self.parent()
+        if not parent or not hasattr(parent, 'db_manager'):
+            self.log.emit("🔍 No database manager available - treating as fresh upload")
+            return []
+        
+        db_manager = parent.db_manager
+        is_connected = False
+        try:
+            is_connected = db_manager.connection and db_manager.connection.is_connected()
+        except Exception:
+            is_connected = False
+            
+        if not is_connected:
+            try:
+                db_manager.connect()
+            except Exception as conn_error:
+                self.log.emit(f"🔍 Cannot connect to database: {str(conn_error)} - treating as fresh upload")
+                return []
+        
+        cursor = None
+        files = []
+        
+        try:
+            cursor = db_manager.connection.cursor(dictionary=True)
+            
+            # Check if the upload_files table exists
+            check_query = """
+            SELECT COUNT(*) as table_exists 
+            FROM information_schema.TABLES 
+            WHERE TABLE_SCHEMA = %s 
+            AND TABLE_NAME = 'upload_files'
+            """
+            cursor.execute(check_query, (db_manager.rds_config['database'],))
+            result = cursor.fetchone()
+            
+            if result and result['table_exists'] == 0:
+                # Table doesn't exist yet - this is a fresh system
+                self.log.emit("🔍 Upload tracking table doesn't exist - treating as fresh upload")
+                return []
+            
+            # Get all files already uploaded for this order
+            query = """
+            SELECT s3_key
+            FROM upload_files
+            WHERE order_number = %s AND upload_status = 'completed'
+            """
+            cursor.execute(query, (order_number,))
+            files = cursor.fetchall()
+            
+            return [file['s3_key'] for file in files] if files else []
+            
+        except Exception as e:
+            self.log.emit(f"🔍 Error checking uploaded files: {e} - treating as fresh upload")
+            return []
+        finally:
+            if cursor:
+                cursor.close()
+    
+    def check_existing_upload(self, db_manager, order_number):
+        """
+        Check if there's already an upload record for this order
+        
+        Args:
+            db_manager: Database manager instance
+            order_number (str): Order number to check
+            
+        Returns:
+            dict or None: Existing upload record if found, None otherwise
+        """
+        try:
+            # Create a new connection for this thread if needed
+            is_connected = False
+            try:
+                is_connected = db_manager.connection and db_manager.connection.is_connected()
+            except Exception:
+                is_connected = False
+                
+            if not is_connected:
+                # Create a fresh connection to avoid conflict with other threads
+                db_manager.connect()
+                
+            cursor = None
+            result = None
+            
+            try:
+                cursor = db_manager.connection.cursor(dictionary=True)
+                query = """
+                SELECT upload_id, file_count
+                FROM uploads
+                WHERE order_number = %s
+                """
+                cursor.execute(query, (order_number,))
+                result = cursor.fetchone()
+            finally:
+                if cursor:
+                    cursor.close()
+            
+            return result
+            
+        except Exception as e:
+            self.log.emit(f"Error checking existing upload: {e}")
+            return None

@@ -1120,7 +1120,7 @@ class S3UploaderGUI(QMainWindow):
             self.log_message(f"Added new photoshoot task {task_id} for order {task_data['order_number']}")
             self.log_message(f"Local path: {task_data['local_path']}")
             
-            # Auto-start the task immediately
+            # Auto-start the task immediately - MOVED HERE to be after database save
             self.start_task(task)
             self.log_message(f"Task {task_id} started automatically")
             
@@ -2631,10 +2631,55 @@ class S3UploaderGUI(QMainWindow):
                     print(f"  - {incomplete_count} incomplete tasks")
                     print(f"  - {completed_today_count} completed today")
                     
+                    # Add a small delay to ensure all components are ready
+                    if incomplete_count > 0:
+                        print("Waiting for components to initialize before starting tasks...")
+                        import time
+                        time.sleep(1)  # 1 second delay before starting any tasks
+                    
+                    # Auto-restart running tasks that were interrupted
+                    running_tasks = [task for task in self.upload_tasks if task['status'] == 'running']
+                    if running_tasks:
+                        print(f"Restarting {len(running_tasks)} interrupted running tasks...")
+                        self.log_message(f"🔄 Found {len(running_tasks)} interrupted tasks, restarting them...")
+                        import time
+                        for i, task in enumerate(running_tasks):
+                            try:
+                                # Add delay between tasks (except for the first one)
+                                if i > 0:
+                                    time.sleep(2)  # Wait 2 seconds between tasks
+                                
+                                # Reset task status to pending first, then auto-start
+                                task['status'] = 'pending'
+                                self.update_task_list(task)
+                                
+                                self.auto_start_task(task)
+                                print(f"Restarted interrupted task {task['id']}: Order {task['order_number']}")
+                            except Exception as e:
+                                print(f"Failed to restart task {task['id']}: {str(e)}")
+                    
+                    # Auto-restart paused tasks that need resuming
+                    paused_tasks = [task for task in self.upload_tasks if task['status'] == 'paused']
+                    if paused_tasks:
+                        print(f"Resuming {len(paused_tasks)} paused tasks...")
+                        self.log_message(f"▶️ Found {len(paused_tasks)} paused tasks, resuming them...")
+                        import time
+                        for i, task in enumerate(paused_tasks):
+                            try:
+                                # Add delay between tasks
+                                if i > 0 or running_tasks:  # Also delay if we had running tasks before
+                                    time.sleep(2)  # Wait 2 seconds between tasks
+                                
+                                self.auto_start_task(task)
+                                print(f"Resumed paused task {task['id']}: Order {task['order_number']}")
+                            except Exception as e:
+                                print(f"Failed to resume task {task['id']}: {str(e)}")
+                    
                     # Auto-start pending tasks
                     pending_tasks = [task for task in self.upload_tasks if task['status'] == 'pending']
                     if pending_tasks:
                         print(f"Auto-starting {len(pending_tasks)} pending tasks...")
+                        self.log_message(f"🆕 Found {len(pending_tasks)} pending tasks, starting them...")
                         import time
                         for i, task in enumerate(pending_tasks):
                             try:
@@ -2661,6 +2706,16 @@ class S3UploaderGUI(QMainWindow):
         try:
             if not task:
                 return
+            
+            # Determine the action type for better logging
+            action_type = "Starting"
+            if task.get('status') == 'paused':
+                action_type = "Resuming"
+            elif task.get('status') == 'running':
+                action_type = "Restarting"
+            
+            print(f"{action_type} task {task['id']}: Order {task['order_number']}")
+            self.log_message(f"{action_type} upload for Order {task['order_number']}")
             
             # Check if we have the required data
             if not task.get('local_path'):
