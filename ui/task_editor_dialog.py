@@ -678,16 +678,40 @@ class TaskEditorDialog(QDialog):
         if self.current_order_path is None:
             self.current_order_path = self.folder_path.text()
         
-        # Calculate relative path from base storage path
+        # Calculate relative path starting from year directory
         full_path = Path(self.folder_path.text())
-        base_storage = Path(self.local_storage_path)
         
         try:
-            # Get the relative path from base storage (this will be the part from year onwards)
-            relative_path = full_path.relative_to(base_storage)
-            local_path_str = "/" + str(relative_path).replace("\\", "/")
-        except ValueError:
-            # If the path is not relative to base storage, use the full path
+            # Find the year folder in the path (4-digit number starting with 20xx)
+            path_parts = full_path.parts
+            year_folder_index = -1
+            
+            for i, part in enumerate(path_parts):
+                # Check if this part looks like a year (4 digits starting with 20)
+                if part.isdigit() and len(part) == 4 and part.startswith('20'):
+                    year_folder_index = i
+                    break
+            
+            if year_folder_index >= 0:
+                # Extract the path from the year folder onwards
+                relative_parts = path_parts[year_folder_index:]
+                local_path_str = "/" + "/".join(relative_parts)
+            else:
+                # Fallback: try to extract from Booking_Folders if year not found
+                base_storage = Path(self.local_storage_path)
+                try:
+                    relative_path = full_path.relative_to(base_storage)
+                    # Remove "Booking_Folders" if it exists at the beginning
+                    relative_parts = relative_path.parts
+                    if relative_parts and relative_parts[0] == "Booking_Folders":
+                        relative_parts = relative_parts[1:]
+                    local_path_str = "/" + "/".join(relative_parts) if relative_parts else str(full_path)
+                except ValueError:
+                    # If the path is not relative to base storage, use the full path
+                    local_path_str = str(full_path)
+                    
+        except Exception as e:
+            # Ultimate fallback: use the full path
             local_path_str = str(full_path)
             
         task_data = {

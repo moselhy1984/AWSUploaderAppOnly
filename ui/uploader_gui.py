@@ -1366,28 +1366,35 @@ class S3UploaderGUI(QMainWindow):
                     full_local_path = task['local_path']
                     print(f"Using existing full path: {full_local_path}")
                 else:
-                    # Create full path by combining base and relative path
+                    # Create full path by combining base storage, Booking_Folders, and relative path
                     if task['local_path'].startswith('/'):
                         # Remove leading slash from relative path
                         relative_path = task['local_path'][1:]
                     else:
                         relative_path = task['local_path']
                     
-                    full_local_path = os.path.join(base_storage_path, relative_path)
+                    # Combine base_storage_path + Booking_Folders + relative_path (which starts from year)
+                    full_local_path = os.path.join(base_storage_path, "Booking_Folders", relative_path)
                     print(f"Created full path: {full_local_path}")
                 
                 # Update task with full path
                 task['full_local_path'] = full_local_path
                 
-                # Check if full path exists
+                # Check if path exists, if not, try to use folder_path
                 if not os.path.exists(full_local_path):
-                    print(f"Warning: Local storage path does not exist: {full_local_path}")
-                    return
+                    if task.get('folder_path') and os.path.exists(task['folder_path']):
+                        task['local_path'] = task['folder_path']
+                        task['full_local_path'] = task['folder_path']
+                        print(f"Using folder_path as local_path for task {task['order_number']}")
+                    else:
+                        print(f"Warning: Local storage path does not exist: {full_local_path}")
+                        return
             else:
                 # No base storage path configured, use local_path directly
                 full_local_path = task['local_path']
                 task['full_local_path'] = full_local_path
                 
+                # Check if path exists, if not, try to use folder_path
                 if not os.path.exists(full_local_path):
                     if task.get('folder_path') and os.path.exists(task['folder_path']):
                         task['local_path'] = task['folder_path']
