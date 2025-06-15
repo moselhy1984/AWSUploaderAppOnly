@@ -530,8 +530,8 @@ class TaskEditorDialog(QDialog):
             month = f"{selected_date.month:02d}-{year}"
             day = f"{selected_date.day:02d}-{selected_date.month:02d}-{year}"
             
-            # Create the full path
-            base_path = Path(self.local_storage_path) / "Booking_Folders"
+            # Create the full path - start directly from year
+            base_path = Path(self.local_storage_path)
             order_folder = base_path / str(year) / month / day / f"Order_{order_number}"
             
             # Create the directories
@@ -695,17 +695,29 @@ class TaskEditorDialog(QDialog):
             if year_folder_index >= 0:
                 # Extract the path from the year folder onwards
                 relative_parts = path_parts[year_folder_index:]
-                local_path_str = "/" + "/".join(relative_parts)
+                local_path_str = "/".join(relative_parts)
             else:
-                # Fallback: try to extract from Booking_Folders if year not found
+                # Fallback: try to extract relative to base storage
                 base_storage = Path(self.local_storage_path)
                 try:
                     relative_path = full_path.relative_to(base_storage)
-                    # Remove "Booking_Folders" if it exists at the beginning
                     relative_parts = relative_path.parts
-                    if relative_parts and relative_parts[0] == "Booking_Folders":
-                        relative_parts = relative_parts[1:]
-                    local_path_str = "/" + "/".join(relative_parts) if relative_parts else str(full_path)
+                    
+                    # Look for year folder in the parts
+                    year_index = -1
+                    for i, part in enumerate(relative_parts):
+                        if part.isdigit() and len(part) == 4 and part.startswith('20'):
+                            year_index = i
+                            break
+                    
+                    if year_index >= 0:
+                        # Start from year folder
+                        final_parts = relative_parts[year_index:]
+                        local_path_str = "/".join(final_parts)
+                    else:
+                        # If no year found, use all parts
+                        local_path_str = "/".join(relative_parts) if relative_parts else str(full_path)
+                    
                 except ValueError:
                     # If the path is not relative to base storage, use the full path
                     local_path_str = str(full_path)

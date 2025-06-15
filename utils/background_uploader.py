@@ -21,12 +21,28 @@ class ProgressCallback:
         
     def __call__(self, bytes_amount):
         self.bytes_transferred += bytes_amount
+        
+        # Update uploader's current file tracking
+        self.uploader.current_file_name = self.file_name
+        self.uploader.current_file_uploaded_bytes = self.bytes_transferred
+        self.uploader.current_file_total_bytes = self.file_size
+        
         # Emit progress for current file
         if self.file_size > 0:
             file_progress = min(100, (self.bytes_transferred / self.file_size) * 100)
-            # Only emit progress updates every 5% or for small files
-            if file_progress % 5 < 1 or self.file_size < 1024*1024:  # Every 5% or files < 1MB
-                self.uploader.log.emit(f"{self.file_name}: {file_progress:.1f}% uploaded")
+            
+            # Emit current file progress for enhanced progress bars
+            self.uploader.current_file_progress.emit(
+                self.file_name, 
+                int(file_progress), 
+                self.bytes_transferred, 
+                self.file_size
+            )
+            
+            # Remove progress percentage logging since we have progress bars
+            # Only emit log updates every 5% or for small files
+            # if file_progress % 5 < 1 or self.file_size < 1024*1024:  # Every 5% or files < 1MB
+            #     self.uploader.log.emit(f"{self.file_name}: {file_progress:.1f}% uploaded")
 
 class BackgroundUploader(QThread):
     """
@@ -36,10 +52,12 @@ class BackgroundUploader(QThread):
         progress: Emitted during upload to update progress bar (current, total)
         log: Emitted to log messages to the main UI
         finished: Emitted when upload is complete
+        current_file_progress: Emitted with current file info (file_name, file_progress, uploaded_bytes, total_bytes)
     """
     progress = pyqtSignal(int, int)
     log = pyqtSignal(str)
     finished = pyqtSignal()
+    current_file_progress = pyqtSignal(str, int, int, int)  # file_name, progress_percent, uploaded_bytes, total_bytes
 
     def __init__(self, folder_path, order_number, order_date, aws_session, 
                  photographers, local_path=None, parent=None):
@@ -64,6 +82,11 @@ class BackgroundUploader(QThread):
         self.total_bytes = 0  # Total bytes to upload
         self.uploaded_bytes = 0  # Bytes uploaded so far
         self.current_file_bytes = 0  # Bytes of current file
+        
+        # Current file tracking for enhanced progress bars
+        self.current_file_name = ""
+        self.current_file_uploaded_bytes = 0
+        self.current_file_total_bytes = 0
         
         # Create state directory if it doesn't exist
         self.state_dir = Path.home() / '.aws_uploader'
@@ -834,7 +857,7 @@ class BackgroundUploader(QThread):
                         skipped_files += 1
                         self.skipped_file_count = skipped_files
                         continue
-                    self.log.emit(f"تم تخطي {Path(s3_key).name} (مرفوع سابقًا)")
+                    self.log.emit(f"{Path(s3_key).name} Skipped (already uploaded)")
                     skipped_files += 1
                     self.skipped_file_count = skipped_files
                     # Update progress for skipped files
@@ -844,7 +867,7 @@ class BackgroundUploader(QThread):
                 # Verify file still exists
                 local_file_path = Path(local_path)
                 if not local_file_path.exists():
-                    self.log.emit(f"Warning: File doesn't exist, skipping: {local_path}")
+                    self.log.emit(f"{Path(local_path).name} Skipped (file not found)")
                     skipped_files += 1
                     self.skipped_file_count = skipped_files
                     self.emit_progress_update()
@@ -869,17 +892,8 @@ class BackgroundUploader(QThread):
                     file_extension = file_info.get('extension', Path(local_path).suffix.lower())
                     original_location = file_info.get('original_location', 'unknown')
                     
-                    location_emoji = "📁" if original_location == "organized" else "📄"
-                    category_emoji = {
-                        'CR2': '📷',
-                        'JPG': '🖼️', 
-                        'Reels/Videos': '🎬',
-                        'OTHER': '📄'
-                    }.get(file_category, '📄')
-                    
-                    self.log.emit(f"{location_emoji} جارٍ رفع {Path(local_path).name} ({uploaded_files + skipped_files + 1}/{self.total_files})")
-                    self.log.emit(f"   {category_emoji} النوع: {file_category} | الامتداد: {file_extension} | المصدر: {original_location}")
-                    self.log.emit(f"   📊 التقدم: {overall_progress:.1f}% ملفات، {bytes_progress:.1f}% بيانات")
+                    # Log uploading status with file name
+                    self.log.emit(f"{Path(local_path).name} Uploading")
                     
                     # Get file extension to determine content type
                     file_ext = Path(local_path).suffix.lower()
@@ -917,6 +931,12 @@ class BackgroundUploader(QThread):
                     self.uploaded_file_count = uploaded_files
                     self.uploaded_bytes += file_size
                     
+                    # Clear current file progress after successful upload
+                    self.current_file_name = ""
+                    self.current_file_uploaded_bytes = 0
+                    self.current_file_total_bytes = 0
+                    self.current_file_progress.emit("", 0, 0, 0)  # Clear current file progress
+                    
                     # Add file to completed files list
                     self.completed_files.append(s3_key)
                     
@@ -933,20 +953,16 @@ class BackgroundUploader(QThread):
                     # Emit progress update after successful upload
                     self.emit_progress_update()
                     
-                    # Calculate final progress percentages
-                    final_overall_progress = ((uploaded_files + skipped_files) / self.total_files) * 100 if self.total_files > 0 else 0
-                    final_bytes_progress = (self.uploaded_bytes / self.total_bytes) * 100 if self.total_bytes > 0 else 0
-                    
-                    self.log.emit(f"✅ تم رفع {Path(s3_key).name} بنجاح!")
-                    self.log.emit(f"   📈 التقدم الإجمالي: {final_overall_progress:.1f}% ملفات، {final_bytes_progress:.1f}% بيانات ({uploaded_files + skipped_files}/{self.total_files})")
+                    # Log successful upload with file name
+                    self.log.emit(f"{Path(s3_key).name} Uploaded")
                     
                 except Exception as upload_error:
-                    self.log.emit(f"❌ خطأ في رفع {Path(s3_key).name}: {str(upload_error)}")
+                    self.log.emit(f"{Path(s3_key).name} Error - {str(upload_error)}")
                     skipped_files += 1
                     self.skipped_file_count = skipped_files
                     self.emit_progress_update()
             except Exception as file_error:
-                self.log.emit(f"Error processing file at index {i}: {str(file_error)}")
+                self.log.emit(f"{Path(local_path).name if 'local_path' in locals() else f'file at index {i}'} Error - {str(file_error)}")
                 skipped_files += 1
                 self.skipped_file_count = skipped_files
                 self.emit_progress_update()
@@ -1052,6 +1068,12 @@ class BackgroundUploader(QThread):
                 self.log.emit(f"Upload complete. {uploaded_files} files uploaded, {skipped_files} files skipped.")
             else:
                 self.log.emit(f"Upload paused. {uploaded_files} files uploaded, {skipped_files} files skipped so far.")
+        
+        # Clear current file progress when upload is finished
+        self.current_file_name = ""
+        self.current_file_uploaded_bytes = 0
+        self.current_file_total_bytes = 0
+        self.current_file_progress.emit("", 0, 0, 0)  # Clear current file progress
         
         self.finished.emit()
     
@@ -1582,7 +1604,7 @@ class BackgroundUploader(QThread):
     def get_local_path_structure(self):
         """
         Extract the local path structure to replicate it on S3
-        Starting from the year folder instead of Booking_Folders
+        Starting from the year folder
         
         Returns:
             str: The relative path structure to use as S3 prefix

@@ -14,7 +14,8 @@ from PyQt5.QtWidgets import (QMainWindow, QPushButton, QVBoxLayout,
                             QTextEdit, QFileDialog, QFrame, QMessageBox, QSystemTrayIcon,
                             QMenu, QDialog, QDateEdit, QComboBox, QListWidget, QListWidgetItem,
                             QTabWidget, QScrollArea, QGridLayout, QTextBrowser, QApplication,
-                            QTableWidget, QTableWidgetItem, QHeaderView, QSpacerItem, QSizePolicy)
+                            QTableWidget, QTableWidgetItem, QHeaderView, QSpacerItem, QSizePolicy,
+                            QAction)
 from PyQt5.QtCore import Qt, QThread, QSettings, QDate, QTimer
 from PyQt5.QtGui import QIcon
 
@@ -22,9 +23,11 @@ from ui.photographers_dialog import PhotographersDialog
 from ui.order_selector_dialog import OrderSelectorDialog
 from ui.image_preview_dialog import ImagePreviewDialog
 from ui.task_editor_dialog import TaskEditorDialog
+from ui.enhanced_progress_bars import EnhancedProgressBars
 from utils.background_uploader import BackgroundUploader
 import getmac
 import uuid
+import re
 
 class S3UploaderGUI(QMainWindow):
     """
@@ -290,8 +293,8 @@ class S3UploaderGUI(QMainWindow):
         # إضافة مسافة رأسية بين قائمة المهام وقائمة اللوج
         upload_layout.addSpacerItem(QSpacerItem(20, 10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         
-        # Progress bar and buttons
-        self.progress_bar = QProgressBar()
+        # Enhanced Progress Bars
+        self.enhanced_progress_bars = EnhancedProgressBars()
         
         button_layout = QHBoxLayout()
         
@@ -331,7 +334,7 @@ class S3UploaderGUI(QMainWindow):
         button_layout.addWidget(self.delete_btn)
         
         upload_layout.addLayout(button_layout)
-        upload_layout.addWidget(self.progress_bar)
+        upload_layout.addWidget(self.enhanced_progress_bars)
         
         # Log area with smaller height
         log_label = QLabel("Log:")
@@ -1351,58 +1354,45 @@ class S3UploaderGUI(QMainWindow):
                 self.log_message(f"Error: Local storage path missing for task {task.get('order_number')}")
                 return
             
-            # Build the full path by combining base storage path with relative path
+            # Get base storage path from database
             base_storage_path = self.db_manager.get_device_storage_path(self.mac_address)
-            if not base_storage_path:
-                # Fallback to QSettings if not in database
-                from PyQt5.QtCore import QSettings
-                settings = QSettings('AWSUploader', 'Settings')
-                base_storage_path = settings.value('local_storage_path', None)
             
-            if base_storage_path:
-                # Check if local_path is already a full path (contains base_storage_path)
-                if task['local_path'].startswith(base_storage_path):
-                    # local_path is already a full path, use it directly
-                    full_local_path = task['local_path']
-                    print(f"Using existing full path: {full_local_path}")
-                else:
-                    # Create full path by combining base storage, Booking_Folders, and relative path
-                    if task['local_path'].startswith('/'):
-                        # Remove leading slash from relative path
-                        relative_path = task['local_path'][1:]
-                    else:
-                        relative_path = task['local_path']
-                    
-                    # Combine base_storage_path + Booking_Folders + relative_path (which starts from year)
-                    full_local_path = os.path.join(base_storage_path, "Booking_Folders", relative_path)
-                    print(f"Created full path: {full_local_path}")
-                
-                # Update task with full path
-                task['full_local_path'] = full_local_path
-                
-                # Check if path exists, if not, try to use folder_path
-                if not os.path.exists(full_local_path):
-                    if task.get('folder_path') and os.path.exists(task['folder_path']):
-                        task['local_path'] = task['folder_path']
-                        task['full_local_path'] = task['folder_path']
-                        print(f"Using folder_path as local_path for task {task['order_number']}")
-                    else:
-                        print(f"Warning: Local storage path does not exist: {full_local_path}")
-                        return
-            else:
-                # No base storage path configured, use local_path directly
+            # Use the local_path directly if it's already a full path
+            if os.path.isabs(task['local_path']) and os.path.exists(task['local_path']):
                 full_local_path = task['local_path']
-                task['full_local_path'] = full_local_path
+                print(f"Using existing full path: {full_local_path}")
+            elif base_storage_path and task['local_path']:
+                # Only combine if local_path is relative
+                if task['local_path'].startswith('/'):
+                    # Remove leading slash from relative path
+                    relative_path = task['local_path'][1:]
+                else:
+                    relative_path = task['local_path']
                 
-                # Check if path exists, if not, try to use folder_path
-                if not os.path.exists(full_local_path):
-                    if task.get('folder_path') and os.path.exists(task['folder_path']):
-                        task['local_path'] = task['folder_path']
-                        task['full_local_path'] = task['folder_path']
-                        print(f"Using folder_path as local_path for task {task['order_number']}")
-                    else:
-                        print(f"Warning: Local storage path does not exist: {full_local_path}")
-                        return
+                # Create full path by combining base storage path with relative path
+                full_local_path = os.path.join(base_storage_path, relative_path)
+                print(f"Created full path: {full_local_path}")
+            else:
+                # Fallback to using folder_path if local_path is not available
+                if task.get('folder_path'):
+                    full_local_path = task['folder_path']
+                    print(f"Using folder_path as local_path for task {task['order_number']}")
+                else:
+                    print(f"Warning: No valid path found for task {task['order_number']}")
+                    return
+            
+            # Update task with full path
+            task['full_local_path'] = full_local_path
+            
+            # Check if path exists, if not, try to use folder_path
+            if not os.path.exists(full_local_path):
+                if task.get('folder_path') and os.path.exists(task['folder_path']):
+                    task['local_path'] = task['folder_path']
+                    task['full_local_path'] = task['folder_path']
+                    print(f"Using folder_path as local_path for task {task['order_number']}")
+                else:
+                    print(f"Warning: Local storage path does not exist: {full_local_path}")
+                    return
             
             # Update task with full path for the uploader
             task['full_local_path'] = full_local_path
@@ -1551,7 +1541,7 @@ class S3UploaderGUI(QMainWindow):
                         task['order_date'],
                         self.aws_session,
                         task['photographers'],
-                        task.get('full_local_path', task['local_path']),  # Use full path if available
+                        task.get('full_local_path', task['local_path']),  # Use path directly without cleaning
                         self
                     )
                     
@@ -1563,6 +1553,9 @@ class S3UploaderGUI(QMainWindow):
                                 self.log_task_message(task_id, message))
                         uploader.finished.connect(lambda task_id=task['id']: 
                                 self.task_finished(task_id))
+                        uploader.current_file_progress.connect(
+                                lambda file_name, progress, uploaded, total: 
+                                self.enhanced_progress_bars.update_file_progress(file_name, progress, uploaded, total))
                     except Exception as signal_error:
                         self.log_message(f"Error connecting signals: {str(signal_error)}")
                     
@@ -1613,7 +1606,7 @@ class S3UploaderGUI(QMainWindow):
                         task['order_date'],
                         self.aws_session,
                         task['photographers'],
-                        task.get('full_local_path', task['local_path']),  # Use full path if available
+                        task.get('full_local_path', task['local_path']),  # Use path directly without cleaning
                         self
                     )
                     
@@ -1705,14 +1698,40 @@ class S3UploaderGUI(QMainWindow):
             status_text = "Uploading" if task['status'] == 'running' else task['status'].capitalize()
             task['item'].setText(f"Task {task['id']}: Order {task['order_number']} - {status_text} ({percentage}%{progress_details})")
         
-        # Update the main progress bar with average progress of all running tasks
-        running_tasks = [t for t in self.upload_tasks if t['status'] == 'running']
-        if running_tasks:
-            avg_progress = sum(t['progress'] for t in running_tasks) / len(running_tasks)
-            self.progress_bar.setValue(round(avg_progress))
+        # Update enhanced progress bars
+        self.update_all_progress_bars()
         
         # Update system tray menu
         self.update_tray_menu()
+    
+    def update_all_progress_bars(self):
+        """Update all progress bars with current task information"""
+        # Count tasks by status
+        completed_tasks = len([t for t in self.upload_tasks if t['status'] == 'completed'])
+        total_tasks = len(self.upload_tasks)
+        running_tasks = [t for t in self.upload_tasks if t['status'] == 'running']
+        
+        # Update all tasks progress bar
+        self.enhanced_progress_bars.update_all_tasks_progress(completed_tasks, total_tasks)
+        
+        # Update current task progress bar
+        if running_tasks:
+            current_task = running_tasks[0]  # Show first running task
+            self.enhanced_progress_bars.update_task_progress(
+                current_task['id'], 
+                current_task['order_number'], 
+                current_task.get('progress', 0)
+            )
+        else:
+            # No running tasks, clear current task progress
+            self.enhanced_progress_bars.task_progress_bar.setValue(0)
+            self.enhanced_progress_bars.task_progress_bar.setFormat("📋 Current Task: No task running")
+        
+        # Show or hide progress bars based on activity
+        if total_tasks > 0 and (running_tasks or completed_tasks > 0):
+            self.enhanced_progress_bars.show_progress_bars()
+        else:
+            self.enhanced_progress_bars.hide_progress_bars()
     
     def _format_bytes(self, bytes_value):
         """Format bytes into human readable format"""
@@ -1758,6 +1777,12 @@ class S3UploaderGUI(QMainWindow):
         # Save completed status to database
         self.save_task_to_database(task)
         
+        # Update all progress bars
+        self.update_all_progress_bars()
+        
+        # Clear current file progress since task is done
+        self.enhanced_progress_bars.clear_file_progress()
+        
         # Enable restart button for completed tasks
         self.restart_btn.setEnabled(True)
         
@@ -1779,7 +1804,7 @@ class S3UploaderGUI(QMainWindow):
     
     def all_tasks_finished(self):
         """Handle completion of all tasks"""
-        self.progress_bar.setValue(100)
+        self.enhanced_progress_bars.clear_all_progress()
         self.cancel_btn.setEnabled(False)
         self.log_message("All upload tasks completed")
         
@@ -2591,16 +2616,28 @@ class S3UploaderGUI(QMainWindow):
                     
                     # Build full path for the task
                     base_storage_path = self.db_manager.get_device_storage_path(self.mac_address)
-                    if base_storage_path and task['local_path']:
-                        # Create full path
+                    
+                    # Use the local_path directly if it's already a full path
+                    if task['local_path'] and os.path.isabs(task['local_path']):
+                        full_local_path = task['local_path']
+                    elif base_storage_path and task['local_path']:
+                        # Only combine if local_path is relative
                         if task['local_path'].startswith('/'):
                             # Remove leading slash from relative path
                             relative_path = task['local_path'][1:]
                         else:
                             relative_path = task['local_path']
                         
+                        # Create full path by combining base storage path with relative path
                         full_local_path = os.path.join(base_storage_path, relative_path)
-                        task['full_local_path'] = full_local_path
+                    else:
+                        # Fallback to using folder_path if local_path is not available
+                        if task.get('folder_path'):
+                            full_local_path = task['folder_path']
+                        else:
+                            full_local_path = task['local_path'] or ''
+                    
+                    task['full_local_path'] = full_local_path
                     
                     # Create QListWidgetItem for the task
                     from PyQt5.QtWidgets import QListWidgetItem
@@ -2766,7 +2803,7 @@ class S3UploaderGUI(QMainWindow):
                 task['order_date'],
                 self.aws_session,
                 task['photographers'],
-                task.get('full_local_path', task['local_path']),  # Use full path if available
+                task.get('full_local_path', task['local_path']),  # Use path directly without cleaning
                 self
             )
             
@@ -2778,6 +2815,9 @@ class S3UploaderGUI(QMainWindow):
                         self.log_task_message(task_id, message))
                 uploader.finished.connect(lambda task_id=task['id']: 
                         self.task_finished(task_id))
+                uploader.current_file_progress.connect(
+                        lambda file_name, progress, uploaded, total: 
+                        self.enhanced_progress_bars.update_file_progress(file_name, progress, uploaded, total))
             except Exception as signal_error:
                 print(f"Error connecting signals: {str(signal_error)}")
             
@@ -4012,8 +4052,16 @@ class S3UploaderGUI(QMainWindow):
                 # Update progress bar based on all running tasks
                 running_tasks = [t for t in self.upload_tasks if t['status'] == 'running']
                 if running_tasks:
-                    avg_progress = sum(t.get('progress', 0) for t in running_tasks) / len(running_tasks)
-                    self.progress_bar.setValue(round(avg_progress))
+                    # Update enhanced progress bars for the first running task
+                    first_running_task = running_tasks[0]
+                    self.enhanced_progress_bars.update_task_progress(
+                        first_running_task["id"], 
+                        first_running_task["order_number"], 
+                        first_running_task.get("progress", 0)
+                    )
+                    
+            # Update all progress bars to reflect current state
+            self.update_all_progress_bars()
                     
             # Update the database if task has a database ID
             if hasattr(task, 'db_id') and task.get('db_id') and self.db_manager.connection:
@@ -4178,52 +4226,41 @@ class S3UploaderGUI(QMainWindow):
         self.activateWindow()
 
     def update_tray_menu(self):
-        """Update the system tray menu with current upload status"""
+        """Update tray menu based on current state"""
         if not hasattr(self, 'tray_icon') or not self.tray_icon:
             return
             
-        # Create new tray menu
-        tray_menu = QMenu()
+        menu = QMenu()
         
         # Show/Hide action
-        show_action = tray_menu.addAction("Show")
+        show_action = QAction("Show", self)
         show_action.triggered.connect(self.show_from_tray)
+        menu.addAction(show_action)
         
-        # Add separator
-        tray_menu.addSeparator()
+        # Separator
+        menu.addSeparator()
         
-        # Upload status action (informational)
-        running_tasks = [t for t in self.upload_tasks if t.get('status') == 'running']
-        completed_tasks = [t for t in self.upload_tasks if t.get('status') == 'completed']
+        # Task status actions
+        if hasattr(self, 'upload_tasks') and self.upload_tasks:
+            running_tasks = [t for t in self.upload_tasks if t.get('status') == 'running']
+            if running_tasks:
+                for task in running_tasks[:3]:  # Show max 3 running tasks
+                    task_action = QAction(f"Order {task['order_number']} - Running", self)
+                    task_action.setEnabled(False)  # Just for display
+                    menu.addAction(task_action)
+                
+                if len(running_tasks) > 3:
+                    more_action = QAction(f"... and {len(running_tasks) - 3} more", self)
+                    more_action.setEnabled(False)
+                    menu.addAction(more_action)
+                
+                menu.addSeparator()
         
-        if running_tasks:
-            status_text = f"🔄 {len(running_tasks)} uploads running"
-            if len(running_tasks) == 1:
-                # Show specific order for single task
-                task = running_tasks[0]
-                progress = int(task.get('progress', 0))
-                status_text = f"🔄 Order {task['order_number']} ({progress}%)"
-        elif completed_tasks:
-            status_text = f"✅ {len(completed_tasks)} uploads completed"
-        else:
-            status_text = "⏸️ No active uploads"
-            
-        status_action = tray_menu.addAction(status_text)
-        status_action.setEnabled(False)  # Make it non-clickable
-        
-        # Add separator
-        tray_menu.addSeparator()
-        
-        # Exit action
-        quit_action = tray_menu.addAction("Exit")
+        # Quit action
+        quit_action = QAction("Quit", self)
         quit_action.triggered.connect(self.quit_app)
+        menu.addAction(quit_action)
         
-        # Update the tray menu
-        self.tray_icon.setContextMenu(tray_menu)
-        
-        # Update tooltip
-        if running_tasks:
-            tooltip = f"AWS File Uploader - {len(running_tasks)} uploads running"
-        else:
-            tooltip = "AWS File Uploader"
-        self.tray_icon.setToolTip(tooltip)
+        self.tray_icon.setContextMenu(menu)
+
+    # clean_path function has been removed - path duplication is now handled at the source
