@@ -47,7 +47,7 @@ class EnhancedProgressBars(QWidget):
                 font-weight: bold;
                 font-size: 10pt;
                 color: #FFFFFF;
-                background-color: #E8E8E8;
+                background-color: #1A1A2E;
             }
             QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -73,7 +73,7 @@ class EnhancedProgressBars(QWidget):
                 font-weight: bold;
                 font-size: 10pt;
                 color: #FFFFFF;
-                background-color: #E8E8E8;
+                background-color: #1A1A2E;
             }
             QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -99,7 +99,7 @@ class EnhancedProgressBars(QWidget):
                 font-weight: bold;
                 font-size: 10pt;
                 color: #FFFFFF;
-                background-color: #E8E8E8;
+                background-color: #1A1A2E;
             }
             QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
