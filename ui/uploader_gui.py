@@ -3197,27 +3197,30 @@ class S3UploaderGUI(QMainWindow):
             str: Photographer name or ID if not found
         """
         try:
+            if not photographer_id:
+                return None
+                
             if not self.db_manager.connection or not self.db_manager.connection.is_connected():
                 self.db_manager.connect()
                 
             if not self.db_manager.connection:
                 return f"ID: {photographer_id}"
                 
-            # Query the database for photographer name
+            # Query the database for photographer name from employees table
             cursor = self.db_manager.connection.cursor(dictionary=True)
             
             query = """
-            SELECT photographer_name
-            FROM photographers
-            WHERE photographer_id = %s
+            SELECT Emp_FullName
+            FROM employees
+            WHERE Emp_ID = %s
             """
             
             cursor.execute(query, (photographer_id,))
             result = cursor.fetchone()
             cursor.close()
             
-            if result and 'photographer_name' in result:
-                return result['photographer_name']
+            if result and 'Emp_FullName' in result:
+                return result['Emp_FullName']
             else:
                 return f"ID: {photographer_id}"
                 
@@ -3245,12 +3248,18 @@ class S3UploaderGUI(QMainWindow):
             'video': upload_data.get('video_photographer_id')
         }
         
+        # Debug: Log photographer IDs
+        self.log_message(f"Photographer IDs from upload data: {photographer_ids}")
+        
         # Get names for each photographer
         for role, photographer_id in photographer_ids.items():
             if photographer_id:
                 name = self.get_photographer_name(photographer_id)
                 if name and not name.startswith("ID:"):
                     photographers[role] = name
+                else:
+                    # Debug: Log the photographer ID that couldn't be found
+                    self.log_message(f"Could not find name for photographer ID {photographer_id} (role: {role})")
         
         # Start photographers section
         html += "<tr><td colspan='2'><hr/><b>📸 Team & Equipment:</b></td></tr>"
