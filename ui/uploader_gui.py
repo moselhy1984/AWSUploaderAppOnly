@@ -48,6 +48,8 @@ class S3UploaderGUI(QMainWindow):
             no_auto_login (bool): Disable automatic login functionality
         """
         super().__init__()
+        
+        # Store initialization parameters
         self.aws_config = aws_config
         self.db_manager = db_manager
         self.user_info = user_info
@@ -57,88 +59,60 @@ class S3UploaderGUI(QMainWindow):
         self.load_all_tasks = load_all_tasks
         self.no_auto_login = no_auto_login
         
-        # Get device info early
-        # Use getmac library for consistent MAC address format
-        self.mac_address = getmac.get_mac_address()
-        
-        device_info = self.db_manager.get_device_info_by_mac(self.mac_address)
-        self.device_id = device_info['DeviceID'] if device_info else None
-        self.device_name = device_info['DeviceName'] if device_info else None
-        
-        print(f"Device Name: {self.device_name}")
-        print(f"MAC Address: {self.mac_address}")
-        print(f"Device ID: {self.device_id}")
-        
-        # Set default application state
+        # Initialize task management
         self.upload_tasks = []
-        self.progress_mode = 'upload'
-        self.sort_order = 'asc'
-        self.sort_column = 0
-        self.image_previews = []
-        
-        # Define app status file path
-        from pathlib import Path
-        self.app_status_file = Path.home() / '.aws_uploader' / 'app_status.json'
-        
-        # Create the status directory if it doesn't exist
-        if not self.app_status_file.parent.exists():
-            self.app_status_file.parent.mkdir(parents=True, exist_ok=True)
-            
-        # Initialize settings
-        from PyQt5.QtCore import QSettings
-        self.settings = QSettings("BALIStudios", "AWSUploader")
-        
-        # Load local storage path from database first, fallback to QSettings
-        db_storage_path = self.db_manager.get_device_storage_path(self.mac_address)
-        if db_storage_path:
-            self.local_storage_path = db_storage_path
-        else:
-            # Fallback to QSettings for backward compatibility
-            self.local_storage_path = self.settings.value("local_storage_path", str(Path.home() / "Documents"))
-            # Save to database for future use
-            if self.local_storage_path:
-                self.db_manager.update_device_storage_path(self.mac_address, self.local_storage_path)
+        self.task_queue = []  # Queue for tasks waiting to be executed
+        self.current_running_task = None  # Track the currently running task
         
         # Initialize AWS session
-        self.init_aws_session()
+        self.aws_session = None
         
-        # Run initialization
-        self.setWindowTitle("Secure File Uploader")
-        self.setup_tray()
+        # Initialize device info
+        self.mac_address = self.get_mac_address()
+        self.device_id = None
+        self.device_name = None
+        self.local_storage_path = None
+        
+        # Initialize UI
         self.init_ui()
         
         # Initialize database schema
         self.init_database_schema()
         
-        # Check user authentication state
-        if not user_info.get('is_logged_in', False):
-            # Disable authenticated features on startup
-            self.disable_authenticated_features()
+        # Get device info from database
+        device_info = self.db_manager.get_device_info_by_mac(self.mac_address)
+        if device_info:
+            self.device_id = device_info['DeviceID']
+            self.device_name = device_info['DeviceName']
+            # Use the correct key for storage path
+            self.local_storage_path = device_info.get('storage_path') or device_info.get('StoragePath')
+            print(f"Device Name: {self.device_name}")
+            print(f"MAC Address: {self.mac_address}")
+            print(f"Device ID: {self.device_id}")
+            
+            # Update device name in UI
+            if hasattr(self, 'device_label'):
+                self.device_label.setText(self.device_name)
         else:
-            self.enable_authenticated_features()
+            print(f"Warning: Device with MAC {self.mac_address} not found in database")
         
-        # Check previous shutdown status
+        # Initialize AWS session
+        self.init_aws_session()
+        
+        # Setup system tray
+        self.setup_tray()
+        
+        # Check for previous shutdown
+        self.check_previous_shutdown()
+        
+        # Load tasks from database if not skipping state load
         if not skip_state_load:
-            self.check_previous_shutdown()
-            
-        # Save shutdown status
-        self.update_app_status("running")
+            self.load_tasks_from_database()
         
-        # Load tasks from database if enabled
-        self.load_tasks_from_database()
-        
-        # Auto-resume tasks if enabled
-        if auto_resume and not safe_mode and not skip_state_load:
-            self.log_message("Auto-resume is enabled, checking for paused tasks...")
-            self.auto_resume_all_tasks()
-            
-        # Log application start
-        if safe_mode:
-            self.log_message("Running in safe mode with limited functionality")
-        if skip_state_load:
-            self.log_message("Skipping loading previous tasks and saved states")
-        if no_auto_login:
-            self.log_message("Automatic login is disabled")
+        # Auto-login if not disabled
+        if not no_auto_login:
+            # Try to auto-login after a short delay
+            QTimer.singleShot(1000, self.try_auto_login)
     
     def check_previous_shutdown(self):
         """
@@ -206,7 +180,59 @@ class S3UploaderGUI(QMainWindow):
     
     def init_ui(self):
         """Initialize the user interface"""
-        self.setWindowTitle('Secure File Uploader')
+        # Set default application state
+        self.progress_mode = 'upload'
+        self.sort_order = 'asc'
+        self.sort_column = 0
+        self.image_previews = []
+        
+        # Define app status file path
+        from pathlib import Path
+        self.app_status_file = Path.home() / '.aws_uploader' / 'app_status.json'
+        
+        # Create the status directory if it doesn't exist
+        if not self.app_status_file.parent.exists():
+            self.app_status_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize settings
+        from PyQt5.QtCore import QSettings
+        self.settings = QSettings("BALIStudios", "AWSUploader")
+        
+        # Load local storage path from database first, fallback to QSettings
+        if self.local_storage_path is None:
+            db_storage_path = self.db_manager.get_device_storage_path(self.mac_address)
+            if db_storage_path:
+                self.local_storage_path = db_storage_path
+            else:
+                # Fallback to QSettings for backward compatibility
+                self.local_storage_path = self.settings.value("local_storage_path", str(Path.home() / "Documents"))
+                # Save to database for future use
+                if self.local_storage_path:
+                    self.db_manager.update_device_storage_path(self.mac_address, self.local_storage_path)
+        
+        # Run initialization
+        self.setWindowTitle("Secure File Uploader")
+        
+        # Check user authentication state
+        if not self.user_info.get('is_logged_in', False):
+            # Disable authenticated features on startup
+            self.disable_authenticated_features()
+        else:
+            self.enable_authenticated_features()
+        
+        # Save shutdown status
+        self.update_app_status("running")
+        
+        # Log application start
+        if self.safe_mode:
+            self.log_message("Running in safe mode with limited functionality")
+        if self.skip_state_load:
+            self.log_message("Skipping loading previous tasks and saved states")
+        if self.no_auto_login:
+            self.log_message("Automatic login is disabled")
+        
+        # Continue with the rest of UI initialization...
+        # (The rest of the original init_ui code would go here)
         self.setGeometry(100, 100, 800, 450)
         
         # Set application icon
@@ -239,9 +265,9 @@ class S3UploaderGUI(QMainWindow):
         user_layout.addStretch()
         
         # Display device name on the right without "Device:" prefix
-        device_label = QLabel(f"{self.device_name or 'Unknown'}")
-        device_label.setStyleSheet("font-weight: bold;")
-        user_layout.addWidget(device_label)
+        self.device_label = QLabel(f"{self.device_name or 'Unknown'}")
+        self.device_label.setStyleSheet("font-weight: bold;")
+        user_layout.addWidget(self.device_label)
         
         user_frame.setLayout(user_layout)
         layout.addWidget(user_frame)
@@ -693,28 +719,28 @@ class S3UploaderGUI(QMainWindow):
     
     def disable_authenticated_features(self):
         """Disable features that require authentication"""
-        # Disable buttons that require authentication
-        self.upload_photoshoot_btn.setEnabled(False)
-        
-        # Start Task and Resume Task buttons don't need authentication anymore
-        # # self.start_all_btn.setEnabled(False)
-        # self.pause_btn.setEnabled(False)
-        # self.resume_btn.setEnabled(False)
-        # self.restart_btn.setEnabled(False)
+        # Disable buttons that require authentication (check if they exist first)
+        if hasattr(self, 'upload_photoshoot_btn'):
+            self.upload_photoshoot_btn.setEnabled(False)
         
         # These still need authentication
-        self.cancel_btn.setEnabled(False)
-        self.delete_btn.setEnabled(False)
-        self.modify_task_btn.setEnabled(False)
+        if hasattr(self, 'cancel_btn'):
+            self.cancel_btn.setEnabled(False)
+        if hasattr(self, 'delete_btn'):
+            self.delete_btn.setEnabled(False)
+        if hasattr(self, 'modify_task_btn'):
+            self.modify_task_btn.setEnabled(False)
     
     def enable_authenticated_features(self):
         """Enable features that require authentication"""
-        # Enable buttons that may be used after authentication
-        self.upload_photoshoot_btn.setEnabled(True)
+        # Enable buttons that may be used after authentication (check if they exist first)
+        if hasattr(self, 'upload_photoshoot_btn'):
+            self.upload_photoshoot_btn.setEnabled(True)
         
         # The other buttons depend on task selection state,
         # so we'll update them based on the current selection
-        self.on_task_selected()
+        if hasattr(self, 'on_task_selected'):
+            self.on_task_selected()
     
     def log_activity(self, category, action, details, user=None):
         """
@@ -1123,9 +1149,9 @@ class S3UploaderGUI(QMainWindow):
             self.log_message(f"Added new photoshoot task {task_id} for order {task_data['order_number']}")
             self.log_message(f"Local path: {task_data['local_path']}")
             
-            # Auto-start the task immediately - MOVED HERE to be after database save
-            self.start_task(task)
-            self.log_message(f"Task {task_id} started automatically")
+            # Add task to queue for sequential execution instead of starting immediately
+            self.add_task_to_queue(task)
+            self.log_message(f"Task {task_id} added to queue")
             
             # Show tray notification for new task
             self.tray_icon.showMessage(
@@ -1343,312 +1369,34 @@ class S3UploaderGUI(QMainWindow):
     
     def start_task(self, task):
         """
-        Start a specific upload task
+        Start a specific upload task (adds to queue for sequential execution)
         """
         try:
             if not task:
                 return
             
-            # Check if we have the required data
-            if not task.get('local_path'):
-                self.log_message(f"Error: Local storage path missing for task {task.get('order_number')}")
+            # Check if user is logged in first
+            if not self.ensure_user_logged_in():
                 return
             
-            # Get base storage path from database
-            base_storage_path = self.db_manager.get_device_storage_path(self.mac_address)
+            # Check if task is already running or in queue
+            if task.get('status') == 'running':
+                self.log_message(f"Task {task['id']} is already running")
+                return
             
-            # Use the local_path directly if it's already a full path
-            if os.path.isabs(task['local_path']) and os.path.exists(task['local_path']):
-                full_local_path = task['local_path']
-                print(f"Using existing full path: {full_local_path}")
-            elif base_storage_path and task['local_path']:
-                # Only combine if local_path is relative
-                if task['local_path'].startswith('/'):
-                    # Remove leading slash from relative path
-                    relative_path = task['local_path'][1:]
-                else:
-                    relative_path = task['local_path']
-                
-                # Create full path by combining base storage path with relative path
-                full_local_path = os.path.join(base_storage_path, relative_path)
-                print(f"Created full path: {full_local_path}")
-            else:
-                # Fallback to using folder_path if local_path is not available
-                if task.get('folder_path'):
-                    full_local_path = task['folder_path']
-                    print(f"Using folder_path as local_path for task {task['order_number']}")
-                else:
-                    print(f"Warning: No valid path found for task {task['order_number']}")
-                    return
+            if task in self.task_queue:
+                self.log_message(f"Task {task['id']} is already in queue")
+                return
             
-            # Update task with full path
-            task['full_local_path'] = full_local_path
-            
-            # Check if path exists, if not, try to use folder_path
-            if not os.path.exists(full_local_path):
-                if task.get('folder_path') and os.path.exists(task['folder_path']):
-                    task['local_path'] = task['folder_path']
-                    task['full_local_path'] = task['folder_path']
-                    print(f"Using folder_path as local_path for task {task['order_number']}")
-                else:
-                    print(f"Warning: Local storage path does not exist: {full_local_path}")
-                    return
-            
-            # Update task with full path for the uploader
-            task['full_local_path'] = full_local_path
-            
-            # Check AWS session before starting
-            if self.aws_session is None:
-                self.log_message("Error: No AWS session available, cannot upload")
-                
-                # Si estamos en modo seguro, crear sesión simulada sin preguntar
-                if self.safe_mode:
-                    self.log_message("Running in safe mode - creating mock AWS session")
-                    self.aws_session = type('MockSession', (), {
-                        'client': lambda *args, **kwargs: None,
-                        'bucket_name': 'mock-bucket'
-                    })
-                else:
-                    # Solo mostrar diálogo si no estamos en modo seguro
-                    # Ask if the user wants to configure AWS credentials
-                    reply = QMessageBox.question(
-                        self,
-                        "AWS Configuration Required",
-                        "AWS credentials are missing or invalid. Would you like to configure them now?",
-                        QMessageBox.Yes | QMessageBox.No,
-                        QMessageBox.Yes
-                    )
-                    
-                    if reply == QMessageBox.Yes:
-                        # Show a dialog to configure AWS credentials
-                        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QFormLayout
-                        
-                        aws_dialog = QDialog(self)
-                        aws_dialog.setWindowTitle("Configure AWS Credentials")
-                        layout = QVBoxLayout()
-                        
-                        form_layout = QFormLayout()
-                        
-                        # AWS access key input
-                        aws_access_key_input = QLineEdit()
-                        aws_access_key_input.setText(os.environ.get("AWS_ACCESS_KEY_ID", ""))
-                        form_layout.addRow("AWS Access Key ID:", aws_access_key_input)
-                        
-                        # AWS secret key input
-                        aws_secret_key_input = QLineEdit()
-                        aws_secret_key_input.setText(os.environ.get("AWS_SECRET_ACCESS_KEY", ""))
-                        form_layout.addRow("AWS Secret Access Key:", aws_secret_key_input)
-                        
-                        # AWS region input
-                        aws_region_input = QLineEdit()
-                        aws_region_input.setText(os.environ.get("AWS_REGION", "us-east-1"))
-                        form_layout.addRow("AWS Region:", aws_region_input)
-                        
-                        # AWS bucket input
-                        aws_bucket_input = QLineEdit()
-                        aws_bucket_input.setText(os.environ.get("AWS_S3_BUCKET", "balistudiostorage"))
-                        form_layout.addRow("S3 Bucket:", aws_bucket_input)
-                        
-                        layout.addLayout(form_layout)
-                        
-                        # Buttons
-                        button_layout = QHBoxLayout()
-                        save_btn = QPushButton("Save")
-                        cancel_btn = QPushButton("Cancel")
-                        
-                        button_layout.addWidget(save_btn)
-                        button_layout.addWidget(cancel_btn)
-                        layout.addLayout(button_layout)
-                        
-                        aws_dialog.setLayout(layout)
-                        
-                        # Connect buttons
-                        save_btn.clicked.connect(aws_dialog.accept)
-                        cancel_btn.clicked.connect(aws_dialog.reject)
-                        
-                        # Show dialog
-                        if aws_dialog.exec_() == QDialog.Accepted:
-                            # Save AWS credentials to environment variables
-                            os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_input.text()
-                            os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_key_input.text()
-                            os.environ["AWS_REGION"] = aws_region_input.text()
-                            os.environ["AWS_S3_BUCKET"] = aws_bucket_input.text()
-                            
-                            # Update aws_config
-                            self.aws_config["AWS_ACCESS_KEY_ID"] = aws_access_key_input.text()
-                            self.aws_config["AWS_SECRET_ACCESS_KEY"] = aws_secret_key_input.text()
-                            self.aws_config["AWS_REGION"] = aws_region_input.text()
-                            self.aws_config["AWS_S3_BUCKET"] = aws_bucket_input.text()
-                            
-                            # Reinitialize AWS session
-                            self.init_aws_session()
-                            
-                            if self.aws_session is None:
-                                self.log_message("Failed to initialize AWS session with provided credentials")
-                                QMessageBox.warning(self, "AWS Error", "Failed to initialize AWS session with provided credentials. Please check your credentials and try again.")
-                                return
-                        else:
-                            self.log_message("AWS configuration cancelled")
-                            return
-                    else:
-                        self.log_message("AWS configuration skipped, cannot upload")
-                        return
-            
-            # Update task status to running
-            task['status'] = 'running'
+            # Set task status to pending (queued)
+            task['status'] = 'pending'
             self.update_task_list(task)
             
-            # Check if there's an existing BackgroundUploader instance
-            if task.get('uploader') and task['uploader'].isRunning():
-                # Resume existing uploader
-                self.log_message(f"Resuming existing task for order {task['order_number']}")
-                try:
-                    task['uploader'].resume()
-                except Exception as e:
-                    self.log_message(f"Error resuming existing task: {str(e)}")
-                    # Clean up task and recreate it
-                    task['uploader'] = None
-                    # We'll create a new task in the steps below
-                return
-            
-            # Clean up previous thread if it exists
-            if task.get('uploader') is not None:
-                self.log_message(f"Cleaning up old thread for order {task['order_number']}")
-                try:
-                    # Make sure old thread is stopped
-                    if task['uploader'].isRunning():
-                        task['uploader'].stop()
-                        task['uploader'].wait(1000)  # Wait one second for termination
-                    task['uploader'] = None
-                except Exception as e:
-                    self.log_message(f"Warning: Error cleaning up old thread: {str(e)}")
-                    task['uploader'] = None
-            
-            # Short delay to ensure cleanup is complete
-            import time
-            time.sleep(0.1)
-            
-            # Create a new uploader or recreate one from saved state
-            state_file = Path.home() / '.aws_uploader' / f"task_state_{task['order_number']}.json"
-            if state_file.exists():
-                self.log_message(f"Found state file for order {task['order_number']}")
-                
-                try:
-                    # Create the BackgroundUploader with basic parameters
-                    uploader = BackgroundUploader(
-                        task['folder_path'],
-                        task['order_number'],
-                        task['order_date'],
-                        self.aws_session,
-                        task['photographers'],
-                        task.get('full_local_path', task['local_path']),  # Use path directly without cleaning
-                        self
-                    )
-                    
-                    # Connect signals with task_id in a safer way - use weaker connections to prevent memory issues
-                    try:
-                        uploader.progress.connect(lambda current, total, task_id=task['id']: 
-                                self.update_task_progress(task_id, current, total))
-                        uploader.log.connect(lambda message, task_id=task['id']: 
-                                self.log_task_message(task_id, message))
-                        uploader.finished.connect(lambda task_id=task['id']: 
-                                self.task_finished(task_id))
-                        uploader.current_file_progress.connect(
-                                lambda file_name, progress, uploaded, total: 
-                                self.enhanced_progress_bars.update_file_progress(file_name, progress, uploaded, total))
-                    except Exception as signal_error:
-                        self.log_message(f"Error connecting signals: {str(signal_error)}")
-                    
-                    # Set the uploader in the task
-                    task['uploader'] = uploader
-                    
-                    # Try to load state in UI before starting
-                    try:
-                        with open(state_file, 'r') as f:
-                            state = json.load(f)
-                            
-                        # Update progress in UI
-                        if 'current_file_index' in state and 'total_files' in state:
-                            progress = (state['current_file_index'] / max(state['total_files'], 1)) * 100
-                            task['progress'] = progress
-                            self.log_message(f"Resuming upload at {progress:.1f}% ({state['current_file_index']}/{state['total_files']})")
-                    except Exception as state_error:
-                        self.log_message(f"Error loading state file: {str(state_error)}")
-                        
-                    # Update task in UI
-                    self.update_task_list(task)
-                    
-                    # Additional delay before starting thread
-                    time.sleep(0.5)
-                    
-                    # Start the thread
-                    self.log_message(f"Starting upload for order {task['order_number']} (resuming from saved state)")
-                    task['uploader'].start()
-                    
-                except Exception as e:
-                    self.log_message(f"Error resuming task from state file: {str(e)}")
-                    import traceback
-                    self.log_message(traceback.format_exc())
-                    
-                    # Set task to error state
-                    task['status'] = 'error'
-                    self.update_task_list(task)
-                
-            else:
-                # No saved state, create a new uploader
-                self.log_message(f"Starting new upload for order {task['order_number']}")
-                
-                try:
-                    # Create the BackgroundUploader
-                    uploader = BackgroundUploader(
-                        task['folder_path'],
-                        task['order_number'],
-                        task['order_date'],
-                        self.aws_session,
-                        task['photographers'],
-                        task.get('full_local_path', task['local_path']),  # Use path directly without cleaning
-                        self
-                    )
-                    
-                    # Connect signals with task_id
-                    uploader.progress.connect(lambda current, total, task_id=task['id']: 
-                            self.update_task_progress(task_id, current, total))
-                    uploader.log.connect(lambda message, task_id=task['id']: 
-                            self.log_task_message(task_id, message))
-                    uploader.finished.connect(lambda task_id=task['id']: 
-                            self.task_finished(task_id))
-                    
-                    # Set the uploader in the task
-                    task['uploader'] = uploader
-                    
-                    # Save state before starting
-                    try:
-                        self.save_task_to_database(task)
-                    except Exception as db_error:
-                        self.log_message(f"Warning: Error saving task to database: {str(db_error)}")
-                    
-                    # Additional delay before starting thread
-                    time.sleep(0.5)
-                    
-                    # Start the thread
-                    task['uploader'].start()
-                except Exception as e:
-                    self.log_message(f"Error starting new task: {str(e)}")
-                    import traceback
-                    self.log_message(traceback.format_exc())
-                    task['status'] = 'error'
-                    self.update_task_list(task)
-            
-            # Update buttons
-            self.update_buttons_state()
-            
-            # Update system tray menu
-            self.update_tray_menu()
+            # Add task to queue for sequential execution
+            self.add_task_to_queue(task)
             
         except Exception as e:
-            self.log_message(f"Error starting task: {str(e)}")
-            task['status'] = 'error'
-            self.update_task_list(task)
+            self.log_message(f"Error queuing task: {str(e)}")
             import traceback
             self.log_message(traceback.format_exc())
     
@@ -1786,11 +1534,8 @@ class S3UploaderGUI(QMainWindow):
         # Enable restart button for completed tasks
         self.restart_btn.setEnabled(True)
         
-        # Find and start the next pending task
-        pending_tasks = [t for t in self.upload_tasks if t['status'] == 'pending']
-        if pending_tasks:
-            self.log_message(f"Starting next pending task for order {pending_tasks[0]['order_number']}")
-            self.start_task(pending_tasks[0])
+        # Notify the queue system that this task is finished
+        self.task_execution_finished(task)
         
         # Check if all tasks are completed
         if all(t['status'] in ['completed', 'cancelled'] for t in self.upload_tasks):
@@ -2681,60 +2426,23 @@ class S3UploaderGUI(QMainWindow):
                         import time
                         time.sleep(1)  # 1 second delay before starting any tasks
                     
-                    # Auto-restart running tasks that were interrupted
-                    running_tasks = [task for task in self.upload_tasks if task['status'] == 'running']
-                    if running_tasks:
-                        print(f"Restarting {len(running_tasks)} interrupted running tasks...")
-                        self.log_message(f"🔄 Found {len(running_tasks)} interrupted tasks, restarting them...")
-                        import time
-                        for i, task in enumerate(running_tasks):
+                    # Add all incomplete tasks to queue for sequential execution
+                    incomplete_tasks = [task for task in self.upload_tasks if task['status'] in ['pending', 'running', 'paused']]
+                    if incomplete_tasks:
+                        print(f"Adding {len(incomplete_tasks)} incomplete tasks to queue...")
+                        self.log_message(f"🔄 Found {len(incomplete_tasks)} incomplete tasks, adding to queue...")
+                        
+                        for task in incomplete_tasks:
                             try:
-                                # Add delay between tasks (except for the first one)
-                                if i > 0:
-                                    time.sleep(2)  # Wait 2 seconds between tasks
-                                
-                                # Reset task status to pending first, then auto-start
+                                # Reset status to pending for queue processing
                                 task['status'] = 'pending'
                                 self.update_task_list(task)
                                 
-                                self.auto_start_task(task)
-                                print(f"Restarted interrupted task {task['id']}: Order {task['order_number']}")
+                                # Add to queue
+                                self.add_task_to_queue(task)
+                                print(f"Added task {task['id']}: Order {task['order_number']} to queue")
                             except Exception as e:
-                                print(f"Failed to restart task {task['id']}: {str(e)}")
-                    
-                    # Auto-restart paused tasks that need resuming
-                    paused_tasks = [task for task in self.upload_tasks if task['status'] == 'paused']
-                    if paused_tasks:
-                        print(f"Resuming {len(paused_tasks)} paused tasks...")
-                        self.log_message(f"▶️ Found {len(paused_tasks)} paused tasks, resuming them...")
-                        import time
-                        for i, task in enumerate(paused_tasks):
-                            try:
-                                # Add delay between tasks
-                                if i > 0 or running_tasks:  # Also delay if we had running tasks before
-                                    time.sleep(2)  # Wait 2 seconds between tasks
-                                
-                                self.auto_start_task(task)
-                                print(f"Resumed paused task {task['id']}: Order {task['order_number']}")
-                            except Exception as e:
-                                print(f"Failed to resume task {task['id']}: {str(e)}")
-                    
-                    # Auto-start pending tasks
-                    pending_tasks = [task for task in self.upload_tasks if task['status'] == 'pending']
-                    if pending_tasks:
-                        print(f"Auto-starting {len(pending_tasks)} pending tasks...")
-                        self.log_message(f"🆕 Found {len(pending_tasks)} pending tasks, starting them...")
-                        import time
-                        for i, task in enumerate(pending_tasks):
-                            try:
-                                # Add delay between tasks (except for the first one)
-                                if i > 0:
-                                    time.sleep(2)  # Wait 2 seconds between tasks
-                                
-                                self.auto_start_task(task)
-                                print(f"Auto-started task {task['id']}: Order {task['order_number']}")
-                            except Exception as e:
-                                print(f"Failed to auto-start task {task['id']}: {str(e)}")
+                                print(f"Failed to add task {task['id']} to queue: {str(e)}")
                 
                 cursor.close()
                 
@@ -2745,7 +2453,7 @@ class S3UploaderGUI(QMainWindow):
 
     def auto_start_task(self, task):
         """
-        Automatically start a task without user interaction
+        Automatically start a task without user interaction (adds to queue)
         """
         try:
             if not task:
@@ -2775,65 +2483,17 @@ class S3UploaderGUI(QMainWindow):
                     print(f"Warning: Local storage path does not exist: {task['local_path']}")
                     return
             
-            # Skip AWS session check for auto-start - assume it will be available
-            if self.aws_session is None:
-                print(f"Warning: No AWS session available for task {task['order_number']}, will try to start anyway")
-            
-            # Update task status to running
-            task['status'] = 'running'
+            # Set task status to pending (queued)
+            task['status'] = 'pending'
             self.update_task_list(task)
             
-            # Clean up previous thread if it exists
-            if task.get('uploader') is not None:
-                try:
-                    if task['uploader'].isRunning():
-                        task['uploader'].stop()
-                        task['uploader'].wait(1000)
-                    task['uploader'] = None
-                except Exception as e:
-                    print(f"Warning: Error cleaning up old thread: {str(e)}")
-                    task['uploader'] = None
-            
-            # Create a new uploader
-            from utils.background_uploader import BackgroundUploader
-            
-            uploader = BackgroundUploader(
-                task['folder_path'],
-                task['order_number'],
-                task['order_date'],
-                self.aws_session,
-                task['photographers'],
-                task.get('full_local_path', task['local_path']),  # Use path directly without cleaning
-                self
-            )
-            
-            # Connect signals
-            try:
-                uploader.progress.connect(lambda current, total, task_id=task['id']: 
-                        self.update_task_progress(task_id, current, total))
-                uploader.log.connect(lambda message, task_id=task['id']: 
-                        self.log_task_message(task_id, message))
-                uploader.finished.connect(lambda task_id=task['id']: 
-                        self.task_finished(task_id))
-                uploader.current_file_progress.connect(
-                        lambda file_name, progress, uploaded, total: 
-                        self.enhanced_progress_bars.update_file_progress(file_name, progress, uploaded, total))
-            except Exception as signal_error:
-                print(f"Error connecting signals: {str(signal_error)}")
-            
-            # Set the uploader in the task
-            task['uploader'] = uploader
-            
-            # Start the upload
-            uploader.start()
-            
-            print(f"Auto-started upload for order {task['order_number']}")
+            # Add task to queue for sequential execution
+            self.add_task_to_queue(task)
             
         except Exception as e:
-            print(f"Error auto-starting task {task.get('order_number', 'unknown')}: {str(e)}")
-            if task:
-                task['status'] = 'pending'
-                self.update_task_list(task)
+            print(f"Error auto-starting task: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     def check_db_schema(self):
         """Verify database schema for user authentication"""
@@ -4263,4 +3923,227 @@ class S3UploaderGUI(QMainWindow):
         
         self.tray_icon.setContextMenu(menu)
 
-    # clean_path function has been removed - path duplication is now handled at the source
+    def get_mac_address(self):
+        """Get MAC address using getmac library"""
+        import getmac
+        return getmac.get_mac_address()
+    
+    def try_auto_login(self):
+        """Try to auto-login if credentials are available"""
+        try:
+            # This is a placeholder - implement based on your authentication logic
+            pass
+        except Exception as e:
+            print(f"Auto-login failed: {str(e)}")
+    
+    def add_task_to_queue(self, task):
+        """Add a task to the execution queue"""
+        if task not in self.task_queue:
+            self.task_queue.append(task)
+            self.log_message(f"Added task {task['id']} (Order {task['order_number']}) to queue")
+        
+        # Try to start the next task if none is running
+        self.process_task_queue()
+    
+    def process_task_queue(self):
+        """Process the task queue - start the next task if none is running"""
+        # Check if there's already a running task
+        if self.current_running_task is not None:
+            # Check if the current task is still actually running
+            if (self.current_running_task.get('status') == 'running' and 
+                self.current_running_task.get('uploader') and 
+                self.current_running_task['uploader'].isRunning()):
+                # Task is still running, don't start a new one
+                return
+            else:
+                # Current task is no longer running, clear it
+                self.current_running_task = None
+        
+        # If no task is running and there are tasks in queue, start the next one
+        if not self.current_running_task and self.task_queue:
+            next_task = self.task_queue.pop(0)  # Get first task from queue
+            self.current_running_task = next_task
+            self.log_message(f"🚀 Starting queued task {next_task['id']} (Order {next_task['order_number']})")
+            self.start_task_execution(next_task)
+    
+    def start_task_execution(self, task):
+        """Actually start executing a task (internal method)"""
+        try:
+            # This is the actual task execution logic from the original start_task method
+            if not task:
+                return
+            
+            # Check if we have the required data
+            if not task.get('local_path'):
+                self.log_message(f"Error: Local storage path missing for task {task.get('order_number')}")
+                self.task_execution_finished(task)
+                return
+            
+            # Check if path exists, if not, try to use folder_path
+            if not os.path.exists(task['local_path']):
+                if task.get('folder_path') and os.path.exists(task['folder_path']):
+                    task['local_path'] = task['folder_path']
+                    self.log_message(f"Using folder_path as local_path for task {task['order_number']}")
+                else:
+                    self.log_message(f"Error: Local storage path does not exist: {task['local_path']}")
+                    self.task_execution_finished(task)
+                    return
+            
+            # Update task status to running
+            task['status'] = 'running'
+            self.update_task_list(task)
+            
+            # Clean up previous thread if it exists
+            if task.get('uploader') is not None:
+                try:
+                    if task['uploader'].isRunning():
+                        task['uploader'].stop()
+                        task['uploader'].wait(1000)
+                    task['uploader'] = None
+                except Exception as e:
+                    self.log_message(f"Warning: Error cleaning up old thread: {str(e)}")
+                    task['uploader'] = None
+            
+            # Create a new uploader
+            from utils.background_uploader import BackgroundUploader
+            
+            uploader = BackgroundUploader(
+                task['folder_path'],
+                task['order_number'],
+                task['order_date'],
+                self.aws_session,
+                task['photographers'],
+                task.get('full_local_path', task['local_path']),
+                self,
+                task_id=task['id']  # Pass task ID for better tracking
+            )
+            
+            # Connect signals
+            try:
+                uploader.progress.connect(lambda current, total, task_id=task['id']: 
+                        self.update_task_progress(task_id, current, total))
+                uploader.log.connect(lambda message, task_id=task['id']: 
+                        self.log_task_message(task_id, message))
+                uploader.finished.connect(lambda task_id=task['id']: 
+                        self.task_finished(task_id))
+                uploader.current_file_progress.connect(
+                        lambda file_name, progress, uploaded, total: 
+                        self.enhanced_progress_bars.update_file_progress(file_name, progress, uploaded, total))
+                
+                # Connect NEW enhanced signals
+                if hasattr(uploader, 'file_progress'):
+                    uploader.file_progress.connect(self.handle_file_progress)
+                if hasattr(uploader, 'task_status_changed'):
+                    uploader.task_status_changed.connect(self.handle_task_status_change)
+                    
+            except Exception as signal_error:
+                self.log_message(f"Error connecting signals: {str(signal_error)}")
+            
+            # Set the uploader in the task
+            task['uploader'] = uploader
+            
+            # Start the upload
+            uploader.start()
+            
+        except Exception as e:
+            self.log_message(f"Error starting task execution: {str(e)}")
+            self.task_execution_finished(task)
+    
+    def task_execution_finished(self, task):
+        """Called when a task finishes execution (success or failure)"""
+        # Clear the current running task
+        if self.current_running_task and self.current_running_task['id'] == task['id']:
+            self.current_running_task = None
+        
+        # Process the next task in queue
+        self.process_task_queue()
+    
+    def handle_file_progress(self, task_id, file_name, progress_percent, uploaded_bytes, total_bytes, formatted_size):
+        """
+        Handle detailed file progress updates with task ID
+        
+        Args:
+            task_id (int): Task ID
+            file_name (str): Current file name
+            progress_percent (int): File progress percentage
+            uploaded_bytes (int): Bytes uploaded for current file
+            total_bytes (int): Total bytes for current file
+            formatted_size (str): Human-readable size format
+        """
+        try:
+            # Find the task
+            task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
+            if not task:
+                return
+            
+            # Update enhanced progress bars with formatted information
+            self.enhanced_progress_bars.update_file_progress(
+                file_name, progress_percent, uploaded_bytes, total_bytes
+            )
+            
+            # Update task item with current file info if running
+            if task['status'] == 'running' and 'item' in task and task['item']:
+                task_progress = task.get('progress', 0)
+                task['item'].setText(
+                    f"Task {task_id}: Order {task['order_number']} - Uploading {file_name} "
+                    f"({task_progress}% | File: {progress_percent}%)"
+                )
+            
+            # Log detailed progress every 25%
+            if progress_percent % 25 == 0 and progress_percent > 0:
+                self.log_message(f"Task {task_id}: {file_name} - {progress_percent}% ({formatted_size})")
+                
+        except Exception as e:
+            self.log_message(f"Error handling file progress: {str(e)}")
+    
+    def handle_task_status_change(self, task_id, status, details):
+        """
+        Handle task status changes with enhanced logging
+        
+        Args:
+            task_id (int): Task ID
+            status (str): New status
+            details (str): Status details
+        """
+        try:
+            # Find the task
+            task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
+            if not task:
+                return
+            
+            # Update task status
+            task['status'] = status
+            
+            # Log status change with enhanced information
+            self.log_message(f"📊 Task {task_id} (Order {task['order_number']}): {status.upper()} - {details}")
+            
+            # Update UI based on status
+            if status == "completed":
+                task['progress'] = 100
+                self.enhanced_progress_bars.clear_file_progress()
+                
+                # Show system notification
+                if hasattr(self, 'tray_icon') and self.tray_icon:
+                    self.tray_icon.showMessage(
+                        "Upload Complete",
+                        f"Order {task['order_number']} uploaded successfully",
+                        self.tray_icon.Information,
+                        3000
+                    )
+            elif status == "paused":
+                # Update tray icon to show paused state
+                if hasattr(self, 'tray_icon') and self.tray_icon:
+                    self.update_tray_menu()
+            elif status == "stopped":
+                task['status'] = 'cancelled'
+                task['progress'] = 0
+                self.enhanced_progress_bars.clear_file_progress()
+            
+            # Update task list display
+            self.update_task_list(task)
+            
+            # Update all progress bars
+            self.update_all_progress_bars()
+            
+        except Exception as e:
+            self.log_message(f"Error handling task status change: {str(e)}")

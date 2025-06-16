@@ -12,6 +12,9 @@ from ui.uploader_gui import S3UploaderGUI
 from pathlib import Path
 from datetime import datetime
 
+# Enhanced Task Manager Integration (temporarily disabled)
+# from apply_enhanced_task_manager import apply_enhanced_task_manager
+
 def main():
     """Main entry point for the application"""
     print("Starting AWS Uploader application...")
@@ -83,6 +86,12 @@ def main():
                               auto_resume=auto_resume, safe_mode=False, 
                               load_all_tasks=load_all_tasks, no_auto_login=no_auto_login)
         window.show()
+        
+        # Temporarily disable enhanced task manager to avoid UUID conflicts
+        print("📋 Using original task management system (enhanced manager disabled)")
+        # Load tasks using original system
+        if not skip_state_load:
+            window.load_tasks_from_database()
         
         # Enable memory manager if available
         if os.environ.get('USE_MEMORY_MANAGER', '0') == '1':
