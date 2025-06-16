@@ -3159,42 +3159,27 @@ class S3UploaderGUI(QMainWindow):
             if local_path and local_path != folder_path:
                 html += f"<tr><td><b>Local Path:</b></td><td>{local_path}</td></tr>"
                 
-            # Photographers
-            main_photographer_id = upload_data.get('main_photographer_id')
-            if main_photographer_id:
-                photographer_name = self.get_photographer_name(main_photographer_id)
-                html += f"<tr><td><b>Main Photographer:</b></td><td>{photographer_name}</td></tr>"
-                
-            assistant_photographer_id = upload_data.get('assistant_photographer_id')
-            if assistant_photographer_id:
-                photographer_name = self.get_photographer_name(assistant_photographer_id)
-                html += f"<tr><td><b>Assistant Photographer:</b></td><td>{photographer_name}</td></tr>"
-                
-            video_photographer_id = upload_data.get('video_photographer_id')
-            if video_photographer_id:
-                photographer_name = self.get_photographer_name(video_photographer_id)
-                html += f"<tr><td><b>Video Photographer:</b></td><td>{photographer_name}</td></tr>"
-                
-            device_name = upload_data.get('DeviceName', 'Unknown')
-            html += f"<tr><td><b>Device:</b></td><td>{device_name}</td></tr>"
+            # Photographers and Device section combined
+            html += self.format_photographers_and_device_section(upload_data)
                 
             html += "</table>"
             
-            # Add actions section
-            html += "<hr/><h3>Actions</h3>"
-            html += "<ul>"
-            html += f"<li><a href='resume:{upload_data['task_id']}'>Resume Upload</a></li>"
-            html += f"<li><a href='view:{upload_data['task_id']}'>View Files</a></li>"
-            html += f"<li><a href='delete:{upload_data['task_id']}'>Delete Task</a></li>"
-            html += "</ul>"
+            # Add image preview section
+            html += self.add_image_preview_section(upload_data)
             
             html += "</body></html>"
             
             # Set the HTML content
             self.upload_details.setHtml(html)
             
-            # Connect the link click handler
-            self.upload_details.anchorClicked.connect(self.handle_order_action)
+            # Disconnect any existing handlers first
+            try:
+                self.upload_details.anchorClicked.disconnect()
+            except Exception:
+                pass
+            
+            # Connect the link click handler for image preview only
+            self.upload_details.anchorClicked.connect(self.handle_preview_action)
             
         except Exception as e:
             self.log_message(f"Error showing order details: {str(e)}")
@@ -3239,390 +3224,131 @@ class S3UploaderGUI(QMainWindow):
         except Exception as e:
             self.log_message(f"Error getting photographer name: {str(e)}")
             return f"ID: {photographer_id}"
-    
-    def handle_order_action(self, url):
+
+    def format_photographers_and_device_section(self, upload_data):
         """
-        Handle clicks on action links in order details
+        Format photographers and device section together
+        
+        Args:
+            upload_data (dict): Upload data dictionary
+            
+        Returns:
+            str: HTML formatted photographers and device section
+        """
+        html = ""
+        photographers = {}
+        
+        # Get photographer IDs
+        photographer_ids = {
+            'main': upload_data.get('main_photographer_id'),
+            'assistant': upload_data.get('assistant_photographer_id'), 
+            'video': upload_data.get('video_photographer_id')
+        }
+        
+        # Get names for each photographer
+        for role, photographer_id in photographer_ids.items():
+            if photographer_id:
+                name = self.get_photographer_name(photographer_id)
+                if name and not name.startswith("ID:"):
+                    photographers[role] = name
+        
+        # Start photographers section
+        html += "<tr><td colspan='2'><hr/><b>📸 Team & Equipment:</b></td></tr>"
+        
+        # Add photographers if any exist
+        if photographers:
+            role_names = {
+                'main': '👨‍📷 Main Photographer',
+                'assistant': '🤝 Assistant Photographer', 
+                'video': '🎬 Video Photographer'
+            }
+            
+            for role, name in photographers.items():
+                display_name = role_names.get(role, role.title())
+                html += f"<tr><td><b>{display_name}:</b></td><td>{name}</td></tr>"
+        else:
+            html += f"<tr><td><b>📷 Photographers:</b></td><td style='color: #888;'>Not specified</td></tr>"
+        
+        # Add device information
+        device_name = upload_data.get('DeviceName', 'Unknown Device')
+        html += f"<tr><td><b>💻 Device:</b></td><td>{device_name}</td></tr>"
+        
+        return html
+
+    def add_image_preview_section(self, upload_data):
+        """
+        Add image preview section to order details
+        
+        Args:
+            upload_data (dict): Upload data dictionary
+            
+        Returns:
+            str: HTML for image preview section
+        """
+        html = "<hr/><h3>📸 Images</h3>"
+        order_number = upload_data.get('order_number', '')
+        if order_number:
+            html += f"<p><a href='preview:{order_number}' style='color: #007acc; text-decoration: none; font-weight: bold;'>🔍 Preview Images from S3</a></p>"
+        else:
+            html += "<p style='color: gray;'>Image preview not available</p>"
+        return html
+
+    def handle_preview_action(self, url):
+        """
+        Handle clicks on preview links in order details
         
         Args:
             url (QUrl): The clicked URL
         """
         try:
-            # Parse the URL
             url_str = url.toString()
             
-            # Extract action and task ID
-            parts = url_str.split(':')
-            if len(parts) != 2:
-                self.log_message(f"Invalid action URL: {url_str}")
-                return
-                
-            action = parts[0]
-            task_id = int(parts[1])
-            
-            self.log_message(f"Order action: {action} for task {task_id}")
-            
-            # Handle different actions
-            if action == 'resume':
-                self.resume_order_from_history(task_id)
-            elif action == 'view':
-                self.view_order_files(task_id)
-            elif action == 'delete':
-                self.delete_order_from_history(task_id)
+            if url_str.startswith('preview:'):
+                order_number = url_str.split(':')[1]
+                self.show_image_preview(order_number)
             else:
-                self.log_message(f"Unknown action: {action}")
+                self.log_message(f"Unknown preview action: {url_str}")
                 
         except Exception as e:
-            self.log_message(f"Error handling order action: {str(e)}")
-            import traceback
-            self.log_message(traceback.format_exc())
-    
-    def resume_order_from_history(self, task_id):
+            self.log_message(f"Error handling preview action: {str(e)}")
+
+    def show_image_preview(self, order_number):
         """
-        Resume upload for a task from history
+        Show image preview dialog for the specified order
         
         Args:
-            task_id (int): Task ID to resume
+            order_number (str): Order number to preview
         """
         try:
-            self.log_message(f"Resuming upload for task {task_id} from history")
-            
-            # Check if user is logged in
-            if not self.ensure_user_logged_in():
-                self.log_message("User not logged in, cannot resume task")
+            if not self.aws_session:
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Error", "AWS session not available for image preview")
                 return
-                
-            # Get task data from database
-            if not self.db_manager.connection or not self.db_manager.connection.is_connected():
-                self.db_manager.connect()
-                
-            if not self.db_manager.connection:
-                self.log_message("Error: No database connection available")
-                return
-                
-            # Query for task details
-            cursor = self.db_manager.connection.cursor(dictionary=True)
             
-            # Determine ID column
-            cursor.execute("""
-            SELECT COLUMN_NAME 
-            FROM information_schema.COLUMNS 
-            WHERE TABLE_SCHEMA = %s 
-            AND TABLE_NAME = 'upload_tasks' 
-            AND COLUMN_NAME IN ('task_id', 'id')
-            """, (self.db_manager.rds_config['database'],))
-            
-            columns = cursor.fetchall()
-            id_column = 'task_id' if ('task_id',) in columns else 'id'
-            
-            # Get task details
-            query = f"""
-            SELECT order_number, folder_path, local_path, order_date, 
-                   main_photographer_id, assistant_photographer_id, video_photographer_id
-            FROM upload_tasks
-            WHERE {id_column} = %s
-            """
-            
-            cursor.execute(query, (task_id,))
-            task_data = cursor.fetchone()
-            cursor.close()
-            
-            if not task_data:
-                self.log_message(f"Error: Task with ID {task_id} not found in database")
-                return
-                
-            # Create a new task for the upload
-            new_task_id = len(self.upload_tasks) + 1
-            
-            # Create photographers dict
-            photographers = {
-                'main': task_data.get('main_photographer_id'),
-                'assistant': task_data.get('assistant_photographer_id'),
-                'video': task_data.get('video_photographer_id')
-            }
-            
-            task = {
-                'id': new_task_id,
-                'order_number': task_data['order_number'],
-                'folder_path': task_data.get('folder_path', ''),
-                'local_path': task_data.get('local_path', task_data.get('folder_path', '')),
-                'status': 'pending',
-                'progress': 0,
-                'uploader': None,
-                'photographers': photographers,
-                'order_date': task_data.get('order_date'),
-                'db_id': task_id,  # Keep original task ID for database updates
-                'device_id': self.device_id,
-                'device_name': self.device_name,
-            }
-            
-            # Create a task item for the list
-            from PyQt5.QtWidgets import QListWidgetItem
-            from PyQt5.QtCore import Qt
-            
-            task_item = QListWidgetItem()
-            task_item.setText(f"Task {new_task_id}: Order {task['order_number']} - Pending")
-            task_item.setData(Qt.UserRole, task['id'])
-            
-            # Add item to task
-            task['item'] = task_item
-            
-            # Add to the list widget
-            self.task_list.addItem(task_item)
-            
-            # Add to tasks list
-            self.upload_tasks.append(task)
-            
-            # Enable the Start All button
-            # self.start_all_btn.setEnabled(True)
-            
-            # Switch to Upload tab
-            self.tabs.setCurrentIndex(0)
-            
-            # Select the new task
-            self.task_list.setCurrentItem(task_item)
-            
-            # Log the action
-            self.log_message(f"Created new task for order {task['order_number']} from history")
-            self.log_activity("task", "resume_from_history", 
-                            f"Created task for order {task['order_number']} from history", 
-                            self.user_info.get('Emp_FullName'))
-            
-            # Ask if user wants to start the task immediately
-            from PyQt5.QtWidgets import QMessageBox
-            reply = QMessageBox.question(
-                self, 
-                'Start Upload', 
-                f'Do you want to start the upload for Order {task["order_number"]} now?',
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes
+            # Import and show the preview dialog
+            from ui.s3_image_preview_dialog import S3ImagePreviewDialog
+            preview_dialog = S3ImagePreviewDialog(
+                order_number, 
+                self.aws_session, 
+                self
             )
+            preview_dialog.exec_()
             
-            if reply == QMessageBox.Yes:
-                # Start the task
-                self.start_task(task)
-                
-        except Exception as e:
-            self.log_message(f"Error resuming order from history: {str(e)}")
-            import traceback
-            self.log_message(traceback.format_exc())
-    
-    def view_order_files(self, task_id):
-        """
-        View files for a task
-        
-        Args:
-            task_id (int): Task ID to view
-        """
-        try:
-            self.log_message(f"Viewing files for task {task_id}")
-            
-            # Get task data from database
-            if not self.db_manager.connection or not self.db_manager.connection.is_connected():
-                self.db_manager.connect()
-                
-            if not self.db_manager.connection:
-                self.log_message("Error: No database connection available")
-                return
-                
-            # Query for task details
-            cursor = self.db_manager.connection.cursor(dictionary=True)
-            
-            # Determine ID column
-            cursor.execute("""
-            SELECT COLUMN_NAME 
-            FROM information_schema.COLUMNS 
-            WHERE TABLE_SCHEMA = %s 
-            AND TABLE_NAME = 'upload_tasks' 
-            AND COLUMN_NAME IN ('task_id', 'id')
-            """, (self.db_manager.rds_config['database'],))
-            
-            columns = cursor.fetchall()
-            id_column = 'task_id' if ('task_id',) in columns else 'id'
-            
-            # Get task details
-            query = f"""
-            SELECT order_number, folder_path, local_path
-            FROM upload_tasks
-            WHERE {id_column} = %s
-            """
-            
-            cursor.execute(query, (task_id,))
-            task_data = cursor.fetchone()
-            cursor.close()
-            
-            if not task_data:
-                self.log_message(f"Error: Task with ID {task_id} not found in database")
-                return
-                
-            # Determine the path to open
-            folder_path = task_data.get('folder_path', '')
-            local_path = task_data.get('local_path', folder_path)
-            
-            path_to_open = local_path if local_path and os.path.exists(local_path) else folder_path
-            
-            if not path_to_open or not os.path.exists(path_to_open):
-                self.log_message(f"Error: Path does not exist: {path_to_open}")
-                
-                # Ask user to browse for folder
-                from PyQt5.QtWidgets import QMessageBox, QFileDialog
-                reply = QMessageBox.question(
-                    self, 
-                    'Path Not Found', 
-                    f'The folder for Order {task_data["order_number"]} was not found at:\n{path_to_open}\n\nDo you want to browse for it?',
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.Yes
-                )
-                
-                if reply == QMessageBox.Yes:
-                    # Browse for folder
-                    folder = QFileDialog.getExistingDirectory(
-                        self, 
-                        f'Select folder for Order {task_data["order_number"]}'
-                    )
-                    
-                    if folder:
-                        path_to_open = folder
-                        
-                        # Update database with new path
-                        if not self.db_manager.connection or not self.db_manager.connection.is_connected():
-                            self.db_manager.connect()
-                            
-                        if self.db_manager.connection:
-                            cursor = self.db_manager.connection.cursor()
-                            
-                            query = f"""
-                            UPDATE upload_tasks
-                            SET local_path = %s
-                            WHERE {id_column} = %s
-                            """
-                            
-                            cursor.execute(query, (folder, task_id))
-                            self.db_manager.connection.commit()
-                            cursor.close()
-                            
-                            self.log_message(f"Updated local path for Order {task_data['order_number']}: {folder}")
-                    else:
-                        return
-                else:
-                    return
-                
-            # Open folder in file explorer
-            import subprocess
-            import platform
-            
-            try:
-                if platform.system() == 'Windows':
-                    os.startfile(path_to_open)
-                elif platform.system() == 'Darwin':  # macOS
-                    subprocess.call(['open', path_to_open])
-                else:  # Linux
-                    subprocess.call(['xdg-open', path_to_open])
-                    
-                self.log_message(f"Opened folder for Order {task_data['order_number']}: {path_to_open}")
-                self.log_activity("task", "view_files", 
-                                f"Viewed files for order {task_data['order_number']}", 
-                                self.user_info.get('Emp_FullName'))
-            except Exception as e:
-                self.log_message(f"Error opening folder: {str(e)}")
-                
-        except Exception as e:
-            self.log_message(f"Error viewing order files: {str(e)}")
-            import traceback
-            self.log_message(traceback.format_exc())
-    
-    def delete_order_from_history(self, task_id):
-        """
-        Delete a task from history
-        
-        Args:
-            task_id (int): Task ID to delete
-        """
-        try:
-            self.log_message(f"Deleting task {task_id} from history")
-            
-            # Check if user is logged in
-            if not self.ensure_user_logged_in():
-                self.log_message("User not logged in, cannot delete task")
-                return
-                
-            # Get task data from database
-            if not self.db_manager.connection or not self.db_manager.connection.is_connected():
-                self.db_manager.connect()
-                
-            if not self.db_manager.connection:
-                self.log_message("Error: No database connection available")
-                return
-                
-            # Query for task details
-            cursor = self.db_manager.connection.cursor(dictionary=True)
-            
-            # Determine ID column
-            cursor.execute("""
-            SELECT COLUMN_NAME 
-            FROM information_schema.COLUMNS 
-            WHERE TABLE_SCHEMA = %s 
-            AND TABLE_NAME = 'upload_tasks' 
-            AND COLUMN_NAME IN ('task_id', 'id')
-            """, (self.db_manager.rds_config['database'],))
-            
-            columns = cursor.fetchall()
-            id_column = 'task_id' if ('task_id',) in columns else 'id'
-            
-            # Get task details
-            query = f"""
-            SELECT order_number
-            FROM upload_tasks
-            WHERE {id_column} = %s
-            """
-            
-            cursor.execute(query, (task_id,))
-            task_data = cursor.fetchone()
-            
-            if not task_data:
-                self.log_message(f"Error: Task with ID {task_id} not found in database")
-                cursor.close()
-                return
-                
-            # Confirm deletion
+        except ImportError:
+            self.log_message("Image preview feature not available. Missing S3ImagePreviewDialog module.")
             from PyQt5.QtWidgets import QMessageBox
-            reply = QMessageBox.question(
-                self, 
-                'Confirm Deletion', 
-                f'Are you sure you want to delete Order {task_data["order_number"]} from the database?\n\nThis action cannot be undone.',
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
-            
-            if reply != QMessageBox.Yes:
-                cursor.close()
-                return
-                
-            # Delete from database
-            delete_query = f"""
-            DELETE FROM upload_tasks
-            WHERE {id_column} = %s
-            """
-            
-            cursor.execute(delete_query, (task_id,))
-            self.db_manager.connection.commit()
-            cursor.close()
-            
-            self.log_message(f"Deleted task for Order {task_data['order_number']} from database")
-            self.log_activity("task", "delete_from_history", 
-                            f"Deleted task for order {task_data['order_number']} from database", 
-                            self.user_info.get('Emp_FullName'))
-            
-            # Refresh the history list
-            self.apply_history_filter()
-            
-            # Clear the details
-            self.upload_details.clear()
-            
+            QMessageBox.information(self, "Feature Not Available", 
+                                   "Image preview feature is not yet implemented.\n\n"
+                                   "This feature will allow you to preview uploaded images from S3.")
         except Exception as e:
-            self.log_message(f"Error deleting order from history: {str(e)}")
-            import traceback
-            self.log_message(traceback.format_exc())
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Error", f"Failed to open image preview: {str(e)}")
+            self.log_message(f"Error opening image preview: {str(e)}")
+    
+# Removed old order action functions: handle_order_action, resume_order_from_history, view_order_files, delete_order_from_history
+    # These have been replaced with the new image preview functionality
+    
+# Removed view_order_files and delete_order_from_history functions
 
     def quit_app(self):
         """
