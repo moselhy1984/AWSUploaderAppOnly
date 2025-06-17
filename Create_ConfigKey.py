@@ -130,7 +130,7 @@ class AwsCredentialsEncryptorGUI:
         try:
             current_mac = getmac.get_mac_address()
             self.mac_address.delete(0, tk.END)
-            self.mac_address.insert(0, current_mac)
+            self.mac_address.insert(0, str(current_mac))
             self.update_status(f"MAC address detected: {current_mac}")
         except Exception as e:
             messagebox.showerror("Error", f"Could not get MAC address: {str(e)}")

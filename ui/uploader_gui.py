@@ -3768,13 +3768,7 @@ class S3UploaderGUI(QMainWindow):
                 uploader.current_file_progress.connect(
                         lambda file_name, progress, uploaded, total: 
                         self.enhanced_progress_bars.update_file_progress(file_name, progress, uploaded, total))
-                
-                # Connect NEW enhanced signals
-                if hasattr(uploader, 'file_progress'):
-                    uploader.file_progress.connect(self.handle_file_progress)
-                if hasattr(uploader, 'task_status_changed'):
-                    uploader.task_status_changed.connect(self.handle_task_status_change)
-                    
+                  
             except Exception as signal_error:
                 self.log_message(f"Error connecting signals: {str(signal_error)}")
             
