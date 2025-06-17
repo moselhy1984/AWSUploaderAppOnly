@@ -31,6 +31,7 @@ import re
 import mysql.connector
 from mysql.connector import errorcode, pooling
 from botocore.exceptions import BotoCoreError, ClientError
+from utils.circuit_breaker import CircuitBreaker, circuit_breaker_decorator
 
 class S3UploaderGUI(QMainWindow):
     """
@@ -125,6 +126,14 @@ class S3UploaderGUI(QMainWindow):
         if not no_auto_login:
             # Try to auto-login after a short delay
             QTimer.singleShot(1000, self.try_auto_login)
+    
+        # Initialize circuit breakers
+        self.init_circuit_breakers()
+    
+    def init_circuit_breakers(self):
+        """Initialize circuit breakers for different services"""
+        self.db_circuit_breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=30)
+        self.aws_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
     
     def check_previous_shutdown(self):
         """
@@ -3812,6 +3821,7 @@ class S3UploaderGUI(QMainWindow):
             self.log_message(f"Error cleaning up thread: {str(e)}")
             task['uploader'] = None
 
+    @circuit_breaker_decorator(failure_threshold=3, recovery_timeout=30)
     def handle_database_operation(self, operation_func, *args, **kwargs):
         """Handle database operations with specific error handling"""
         connection = None
@@ -3833,6 +3843,7 @@ class S3UploaderGUI(QMainWindow):
             if connection and connection != self.db_manager.connection:
                 connection.close()
 
+    @circuit_breaker_decorator(failure_threshold=5, recovery_timeout=60)
     def handle_aws_operation(self, operation_func, *args, **kwargs):
         """Handle AWS operations with specific error handling"""
         try:
