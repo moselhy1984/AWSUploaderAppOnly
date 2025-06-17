@@ -5,7 +5,7 @@ import os
 import sys
 import json
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import boto3
 from boto3.session import Session
@@ -28,6 +28,9 @@ from utils.background_uploader import BackgroundUploader
 import getmac
 import uuid
 import re
+import mysql.connector
+from mysql.connector import errorcode, pooling
+from botocore.exceptions import BotoCoreError, ClientError
 
 class S3UploaderGUI(QMainWindow):
     """
@@ -78,6 +81,9 @@ class S3UploaderGUI(QMainWindow):
         
         # Initialize database schema
         self.init_database_schema()
+        
+        # Initialize connection pool
+        self.init_connection_pool()
         
         # Get device info from database
         device_info = self.db_manager.get_device_info_by_mac(self.mac_address)
@@ -1504,49 +1510,53 @@ class S3UploaderGUI(QMainWindow):
         self.log_message(f"Task {task_id}: {message}")
     
     def task_finished(self, task_id):
-        """
-        Handle completion of a specific task
-        
-        Args:
-            task_id (int): Finished task ID
-        """
-        # Find the task
-        task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
-        if not task:
-            return
-        
-        # Update task status
-        task['status'] = 'completed'
-        task['progress'] = 100
-        
-        # Update the list item if it exists
-        if 'item' in task and task['item']:
-            task['item'].setText(f"Task {task['id']}: Order {task['order_number']} - Completed")
-        
-        # Save completed status to database
-        self.save_task_to_database(task)
-        
-        # Update all progress bars
-        self.update_all_progress_bars()
-        
-        # Clear current file progress since task is done
-        self.enhanced_progress_bars.clear_file_progress()
-        
-        # Enable restart button for completed tasks
-        self.restart_btn.setEnabled(True)
-        
-        # Notify the queue system that this task is finished
-        self.task_execution_finished(task)
-        
-        # Check if all tasks are completed
-        if all(t['status'] in ['completed', 'cancelled'] for t in self.upload_tasks):
-            self.all_tasks_finished()
-        
-        # Update system tray menu
-        self.update_tray_menu()
-        
-        # Refresh the upload history
-        self.load_upload_history()
+        """Called when a task finishes execution"""
+        try:
+            # Find the task
+            task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
+            if not task:
+                return
+            
+            # Update task status
+            task['status'] = 'completed'
+            task['progress'] = 100
+            
+            # Update UI
+            self.update_task_list(task)
+            self.update_buttons_state()
+            
+            # Clean up completed tasks periodically
+            self.cleanup_completed_tasks()
+            
+            # Process next task
+            self.task_execution_finished(task)
+            
+        except Exception as e:
+            self.log_message(f"Error in task_finished: {str(e)}")
+    
+    def cleanup_completed_tasks(self):
+        """Clean up old completed tasks to free memory"""
+        try:
+            from datetime import datetime, timedelta
+            cutoff_time = datetime.now() - timedelta(hours=24)
+            
+            # احتفظ بالمهام الحديثة فقط
+            active_tasks = []
+            for task in self.upload_tasks:
+                if (task['status'] in ['running', 'paused', 'pending'] or 
+                    task.get('created_at', datetime.now()) > cutoff_time):
+                    active_tasks.append(task)
+                else:
+                    # تنظيف الخيط إن وجد
+                    self.cleanup_task_thread(task)
+            
+            removed_count = len(self.upload_tasks) - len(active_tasks)
+            if removed_count > 0:
+                self.upload_tasks = active_tasks
+                self.log_message(f"Cleaned up {removed_count} old completed tasks")
+                
+        except Exception as e:
+            self.log_message(f"Error cleaning up tasks: {str(e)}")
     
     def all_tasks_finished(self):
         """Handle completion of all tasks"""
@@ -3864,3 +3874,66 @@ class S3UploaderGUI(QMainWindow):
         except Exception as e:
             self.log_message(f"Error cleaning up thread: {str(e)}")
             task['uploader'] = None
+
+    def handle_database_operation(self, operation_func, *args, **kwargs):
+        """Handle database operations with specific error handling"""
+        connection = None
+        try:
+            connection = self.get_db_connection()
+            return operation_func(connection, *args, **kwargs)
+        except mysql.connector.Error as db_error:
+            if db_error.errno == errorcode.CR_SERVER_LOST:
+                self.log_message("Database connection lost, attempting reconnect...")
+                self.db_manager.reconnect()
+                return operation_func(connection, *args, **kwargs)
+            else:
+                self.log_message(f"Database error: {db_error}")
+                raise
+        except Exception as e:
+            self.log_message(f"Unexpected error in database operation: {str(e)}")
+            raise
+        finally:
+            if connection and connection != self.db_manager.connection:
+                connection.close()
+
+    def handle_aws_operation(self, operation_func, *args, **kwargs):
+        """Handle AWS operations with specific error handling"""
+        try:
+            return operation_func(*args, **kwargs)
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == 'NoCredentialsError':
+                self.log_message("AWS credentials not found")
+            elif error_code == 'AccessDenied':
+                self.log_message("AWS access denied")
+            else:
+                self.log_message(f"AWS error: {error_code}")
+            raise
+        except BotoCoreError as e:
+            self.log_message(f"AWS connection error: {str(e)}")
+            raise
+
+    def init_connection_pool(self):
+        """Initialize database connection pool"""
+        try:
+            self.db_pool = pooling.MySQLConnectionPool(
+                pool_name="uploader_pool",
+                pool_size=5,
+                pool_reset_session=True,
+                **self.db_manager.rds_config
+            )
+            self.log_message("Database connection pool initialized successfully")
+        except Exception as e:
+            self.log_message(f"Failed to create connection pool: {str(e)}")
+            self.db_pool = None
+
+    def get_db_connection(self):
+        """Get connection from pool"""
+        try:
+            if self.db_pool:
+                return self.db_pool.get_connection()
+            else:
+                return self.db_manager.connection
+        except Exception as e:
+            self.log_message(f"Error getting database connection: {str(e)}")
+            return self.db_manager.connection
