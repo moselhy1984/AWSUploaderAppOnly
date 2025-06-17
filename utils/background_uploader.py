@@ -15,6 +15,7 @@ from functools import wraps
 import concurrent.futures
 import boto3
 from botocore.exceptions import ClientError
+from botocore.config import Config
 from PyQt5.QtCore import QThread, pyqtSignal, QMutex, QMutexLocker
 import shutil
 
@@ -117,28 +118,25 @@ class EnhancedProgressTracker:
             self.last_time = current_time
             self.last_bytes = uploaded_bytes
             return
-            
+        
         # Calculate speed
-        time_diff = current_time - self.last_time
-        if time_diff >= 1.0:  # Update every second
-            bytes_diff = uploaded_bytes - self.last_bytes
-            current_speed = bytes_diff / time_diff
-            
-            # Keep speed history for smoothing
-            self.speed_history.append(current_speed)
-            if len(self.speed_history) > self.speed_history_size:
-                self.speed_history.pop(0)
-            
-            # Calculate average speed
-            self.bytes_per_second = sum(self.speed_history) / len(self.speed_history)
-            
-            # Calculate ETA
-            remaining_bytes = total_bytes - uploaded_bytes
-            if self.bytes_per_second > 0:
-                self.eta_seconds = remaining_bytes / self.bytes_per_second
-            
-            self.last_bytes = uploaded_bytes
-            self.last_time = current_time
+        if self.last_time is not None:
+            time_diff = current_time - self.last_time
+            if time_diff >= 1.0:  # Update every second
+                bytes_diff = uploaded_bytes - self.last_bytes
+                current_speed = bytes_diff / time_diff
+                # Keep speed history for smoothing
+                self.speed_history.append(current_speed)
+                if len(self.speed_history) > self.speed_history_size:
+                    self.speed_history.pop(0)
+                # Calculate average speed
+                self.bytes_per_second = sum(self.speed_history) / len(self.speed_history)
+                # Calculate ETA
+                remaining_bytes = total_bytes - uploaded_bytes
+                if self.bytes_per_second > 0:
+                    self.eta_seconds = remaining_bytes / self.bytes_per_second
+                self.last_bytes = uploaded_bytes
+                self.last_time = current_time
             
     def get_eta_formatted(self):
         if self.eta_seconds <= 0:
@@ -796,8 +794,9 @@ class BackgroundUploader(QThread):
         # Check if aws_session has bucket_name attribute
         if not hasattr(self.aws_session, 'bucket_name'):
             parent = self.parent()
-            if parent and hasattr(parent, 'aws_config'):
-                bucket_name = parent.aws_config.get('AWS_S3_BUCKET', 'balistudiostorage')
+            aws_config = getattr(parent, 'aws_config', None)
+            if aws_config:
+                bucket_name = aws_config.get('AWS_S3_BUCKET', 'balistudiostorage')
                 self.aws_session.bucket_name = bucket_name
                 self.log.emit(f"Using bucket name from parent config: {bucket_name}")
             else:
@@ -807,7 +806,7 @@ class BackgroundUploader(QThread):
         
         # Create S3 client with enhanced configuration
         return self.aws_session.client('s3',
-            config=boto3.session.Config(
+            config=Config(
                 signature_version='s3v4',
                 s3={'addressing_style': 'path'},
                 connect_timeout=self.settings.connection_timeout,
@@ -1190,11 +1189,11 @@ class BackgroundUploader(QThread):
         """Record the upload in the database"""
         try:
             parent = self.parent()
-            if not parent or not hasattr(parent, 'db_manager'):
+            db_manager = getattr(parent, 'db_manager', None)
+            if db_manager is None:
+                self.log.emit("No database manager available - skipping database operation.")
                 return
                 
-            db_manager = parent.db_manager
-            
             # Convert photographer IDs to integers
             main_photographer_id = int(self.photographers['main']) if self.photographers['main'] else None
             assistant_photographer_id = int(self.photographers['assistant']) if self.photographers['assistant'] else None
@@ -1761,11 +1760,10 @@ class BackgroundUploader(QThread):
             list: List of S3 keys for files already uploaded
         """
         parent = self.parent()
-        if not parent or not hasattr(parent, 'db_manager'):
-            self.log.emit("🔍 No database manager available - treating as fresh upload")
+        db_manager = getattr(parent, 'db_manager', None)
+        if db_manager is None:
+            self.log.emit("No database manager available - treating as fresh upload")
             return []
-        
-        db_manager = parent.db_manager
         
         try:
             with self.db_connection_manager.get_connection(db_manager) as connection:
