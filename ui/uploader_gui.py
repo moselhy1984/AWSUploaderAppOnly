@@ -478,8 +478,10 @@ class S3UploaderGUI(QMainWindow):
         self.activity_table.setHorizontalHeaderLabels(["Timestamp", "User", "Activity", "Details", "IP/Device"])
         self.activity_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.activity_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.activity_table.horizontalHeader().setStretchLastSection(True)
-        self.activity_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        header = self.activity_table.horizontalHeader()
+        if header is not None:
+            header.setStretchLastSection(True)
+            header.setSectionResizeMode(3, QHeaderView.Stretch)
         
         activity_layout.addWidget(self.activity_table)
         
@@ -979,8 +981,9 @@ class S3UploaderGUI(QMainWindow):
         tray_menu = QMenu()
         
         # Show/Hide action
-        show_action = tray_menu.addAction("Show")
+        show_action = QAction("Show", self)
         show_action.triggered.connect(self.show_from_tray)
+        tray_menu.addAction(show_action)
         
         # Add separator
         tray_menu.addSeparator()
@@ -988,18 +991,19 @@ class S3UploaderGUI(QMainWindow):
         # Upload status action (informational)
         running_tasks = len([t for t in self.upload_tasks if t.get('status') == 'running'])
         if running_tasks > 0:
-            status_action = tray_menu.addAction(f"🔄 {running_tasks} uploads running")
+            status_action = QAction(f"🔄 {running_tasks} uploads running", self)
             status_action.setEnabled(False)  # Make it non-clickable
         else:
-            status_action = tray_menu.addAction("✅ No active uploads")
+            status_action = QAction("✅ No active uploads", self)
             status_action.setEnabled(False)  # Make it non-clickable
         
         # Add separator
         tray_menu.addSeparator()
         
         # Exit action
-        quit_action = tray_menu.addAction("Exit")
+        quit_action = QAction("Exit", self)
         quit_action.triggered.connect(self.quit_app)
+        tray_menu.addAction(quit_action)
         
         self.tray_icon.setContextMenu(tray_menu)
         
@@ -1014,9 +1018,9 @@ class S3UploaderGUI(QMainWindow):
     
     def tray_icon_activated(self, reason):
         """Handle tray icon activation (clicks)"""
-        if reason == QSystemTrayIcon.DoubleClick:
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self.show_from_tray()
-        elif reason == QSystemTrayIcon.Trigger:  # Single click on some systems
+        elif reason == QSystemTrayIcon.ActivationReason.Trigger:  # Single click on some systems
             self.show_from_tray()
     
     def log_message(self, message):
@@ -1115,7 +1119,7 @@ class S3UploaderGUI(QMainWindow):
             task_item.setText(f"Task {task_id}: Order {task_data['order_number']} - Pending")
             
             # Store only the task ID directly
-            task_item.setData(Qt.UserRole, task_id)
+            task_item.setData(Qt.ItemDataRole.UserRole, task_id)
             
             # Add to the list widget
             self.task_list.addItem(task_item)
@@ -1157,7 +1161,7 @@ class S3UploaderGUI(QMainWindow):
             self.tray_icon.showMessage(
                 "📤 New Upload Started",
                 f"Started uploading Order {task_data['order_number']}",
-                QSystemTrayIcon.Information,
+                QSystemTrayIcon.MessageIcon.Information,
                 3000
             )
     
@@ -1172,7 +1176,7 @@ class S3UploaderGUI(QMainWindow):
             QMessageBox.information(self, "Information", "No task selected")
             return
         
-        task_data = selected_items[0].data(Qt.UserRole)
+        task_data = selected_items[0].data(Qt.ItemDataRole.UserRole)
         # Check if task_data is a dictionary or a direct task_id
         if isinstance(task_data, dict):
             task_id = task_data['id']
@@ -1227,7 +1231,7 @@ class S3UploaderGUI(QMainWindow):
                 task['item'].setText(f"Task {task['id']}: Order {updated_data['order_number']} - {task['status'].capitalize()}")
                 
                 # Store only the task ID directly
-                task['item'].setData(Qt.UserRole, task['id'])
+                task['item'].setData(Qt.ItemDataRole.UserRole, task['id'])
             
             self.log_message(f"Modified task {task_id} for order {updated_data['order_number']}")
     
@@ -1245,7 +1249,7 @@ class S3UploaderGUI(QMainWindow):
             return
         
         # Get the selected task
-        task_data = selected_items[0].data(Qt.UserRole)
+        task_data = selected_items[0].data(Qt.ItemDataRole.UserRole)
         
         # Check if task_data is a dictionary or a direct task_id
         if isinstance(task_data, dict):
@@ -1292,7 +1296,7 @@ class S3UploaderGUI(QMainWindow):
         """Handle double-click on task item to open folder"""
         try:
             # Get the selected task
-            task_data = item.data(Qt.UserRole)
+            task_data = item.data(Qt.ItemDataRole.UserRole)
             
             # Check if task_data is a dictionary or a direct task_id
             if isinstance(task_data, dict):
@@ -1558,7 +1562,7 @@ class S3UploaderGUI(QMainWindow):
         self.tray_icon.showMessage(
             "🎉 All Uploads Complete!",
             f"Successfully completed {completed_count} upload tasks",
-            QSystemTrayIcon.Information,
+            QSystemTrayIcon.MessageIcon.Information,
             5000
         )
         
@@ -1577,7 +1581,7 @@ class S3UploaderGUI(QMainWindow):
         if not selected_items:
             return
         
-        task_id = selected_items[0].data(Qt.UserRole)
+        task_id = selected_items[0].data(Qt.ItemDataRole.UserRole)
         task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
         
         if not task:
@@ -1623,7 +1627,7 @@ class S3UploaderGUI(QMainWindow):
         if not selected_items:
             return
         
-        task_id = selected_items[0].data(Qt.UserRole)
+        task_id = selected_items[0].data(Qt.ItemDataRole.UserRole)
         task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
         
         if not task:
@@ -1668,7 +1672,7 @@ class S3UploaderGUI(QMainWindow):
         if not selected_items:
             return
         
-        task_id = selected_items[0].data(Qt.UserRole)
+        task_id = selected_items[0].data(Qt.ItemDataRole.UserRole)
         task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
         
         if not task:
@@ -1728,7 +1732,7 @@ class S3UploaderGUI(QMainWindow):
         if not selected_items:
             return
         
-        task_data = selected_items[0].data(Qt.UserRole)
+        task_data = selected_items[0].data(Qt.ItemDataRole.UserRole)
         # Check if task_data is a dictionary or a direct task_id
         if isinstance(task_data, dict):
             task_id = task_data['id']
@@ -1788,7 +1792,7 @@ class S3UploaderGUI(QMainWindow):
         if not selected_items:
             return
             
-        task_data = selected_items[0].data(Qt.UserRole)
+        task_data = selected_items[0].data(Qt.ItemDataRole.UserRole)
         # Check if task_data is a dictionary or a direct task_id
         if isinstance(task_data, dict):
             task_id = task_data['id']
@@ -2401,7 +2405,7 @@ class S3UploaderGUI(QMainWindow):
                     else:
                         task_item.setText(f"Task {task_id}: Order {task['order_number']} - {task['status'].capitalize()}")
                     
-                    task_item.setData(Qt.UserRole, task_id)
+                    task_item.setData(Qt.ItemDataRole.UserRole, task_id)
                     
                     # Add item to task
                     task['item'] = task_item
@@ -2722,7 +2726,7 @@ class S3UploaderGUI(QMainWindow):
                 from PyQt5.QtWidgets import QListWidgetItem
                 from PyQt5.QtCore import Qt
                 item = QListWidgetItem(item_text)
-                item.setData(Qt.UserRole, upload['task_id'])
+                item.setData(Qt.ItemDataRole.UserRole, upload['task_id'])
                 self.today_uploads_list.addItem(item)
                 
         except Exception as e:
@@ -2836,7 +2840,7 @@ class S3UploaderGUI(QMainWindow):
                 
                 # Add the item to the list
                 item = QListWidgetItem(item_text)
-                item.setData(Qt.UserRole, upload)
+                item.setData(Qt.ItemDataRole.UserRole, upload)
                 self.history_list.addItem(item)
             
             # Log activity
@@ -3085,7 +3089,7 @@ class S3UploaderGUI(QMainWindow):
         try:
             # Get the upload data from the item
             from PyQt5.QtCore import Qt
-            upload_data = item.data(Qt.UserRole)
+            upload_data = item.data(Qt.ItemDataRole.UserRole)
             
             if not upload_data:
                 self.log_message("No upload data found for selected item")
@@ -3434,7 +3438,7 @@ class S3UploaderGUI(QMainWindow):
                 progress = int(task.get('progress', 0))
                 
                 item.setText(f"Task {task['id']}: Order {task['order_number']} - {status_text} ({progress}%)")
-                item.setData(Qt.UserRole, task['id'])
+                item.setData(Qt.ItemDataRole.UserRole, task['id'])
                 
                 # Store the item in the task
                 task['item'] = item
@@ -3486,7 +3490,7 @@ class S3UploaderGUI(QMainWindow):
             return
             
         # Get the selected task
-        task_data = selected_items[0].data(Qt.UserRole)
+        task_data = selected_items[0].data(Qt.ItemDataRole.UserRole)
         
         # Check if task_data is a dictionary or a direct task_id
         if isinstance(task_data, dict):
@@ -3558,7 +3562,7 @@ class S3UploaderGUI(QMainWindow):
                 
             # Create session if we have credentials
             if aws_access_key and aws_secret_key:
-                self.aws_session = boto3.session.Session(
+                self.aws_session = boto3.Session(
                     aws_access_key_id=aws_access_key,
                     aws_secret_access_key=aws_secret_key,
                     region_name=region
@@ -3576,7 +3580,7 @@ class S3UploaderGUI(QMainWindow):
                 # Try creating a session with default credentials
                 self.log_message("No explicit AWS credentials provided, trying default credentials")
                 try:
-                    self.aws_session = boto3.session.Session()
+                    self.aws_session = boto3.Session()
                     s3 = self.aws_session.client('s3')
                     s3.list_objects_v2(Bucket=bucket_name, MaxKeys=1)
                     self.log_message(f"Connected to bucket using default credentials: {bucket_name}")
@@ -3603,7 +3607,7 @@ class S3UploaderGUI(QMainWindow):
             self.tray_icon.showMessage(
                 "AWS File Uploader",
                 "Application was minimized to tray. Click the tray icon to restore.",
-                QSystemTrayIcon.Information,
+                QSystemTrayIcon.MessageIcon.Information,
                 3000
             )
             
@@ -3862,7 +3866,7 @@ class S3UploaderGUI(QMainWindow):
                     self.tray_icon.showMessage(
                         "Upload Complete",
                         f"Order {task['order_number']} uploaded successfully",
-                        self.tray_icon.Information,
+                        self.tray_icon.MessageIcon.Information,
                         3000
                     )
             elif status == "paused":
