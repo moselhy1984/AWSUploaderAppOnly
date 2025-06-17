@@ -55,74 +55,70 @@ class DatabaseManager:
             if not self.connection or not self.connection.is_connected():
                 self.connect()
                 
-            cursor = self.connection.cursor(dictionary=True)
-            
-            # First check if employees table exists
-            cursor.execute("""
-            SELECT COUNT(*) as table_exists
-            FROM information_schema.tables
-            WHERE table_schema = %s
-            AND table_name = 'employees'
-            """, (self.rds_config['database'],))
-            
-            result = cursor.fetchone()
-            if result['table_exists'] == 0:
-                print("Error: Employees table does not exist!")
-                cursor.close()
-                return False
+            with self.connection.cursor(dictionary=True) as cursor:
                 
-            # Then check if necessary columns exist
-            cursor.execute("""
-            SELECT COUNT(*) as columns_exist
-            FROM information_schema.COLUMNS 
-            WHERE TABLE_SCHEMA = %s 
-            AND TABLE_NAME = 'employees' 
-            AND COLUMN_NAME IN ('Emp_UserName', 'Emp_Password')
-            """, (self.rds_config['database'],))
-            
-            result = cursor.fetchone()
-            if result['columns_exist'] < 2:
-                print("Error: Username/password columns don't fully exist in employees table!")
-                cursor.close()
-                return False
+                # First check if employees table exists
+                cursor.execute("""
+                SELECT COUNT(*) as table_exists
+                FROM information_schema.tables
+                WHERE table_schema = %s
+                AND table_name = 'employees'
+                """, (self.rds_config['database'],))
                 
-            # Now try authentication
-            query = """
-            SELECT Emp_ID, Emp_FullName, Emp_MacAddress, Emp_Admin, Emp_UserName
-            FROM employees 
-            WHERE Emp_UserName = %s AND Emp_Password = %s
-            """
-            
-            print(f"Executing authentication query with username: {username}")
-            cursor.execute(query, (username, password))
-            user = cursor.fetchone()
-            
-            if user:
-                # Add login flag
-                user['is_logged_in'] = True
-                # For fallback authentication in UI
-                user['username'] = user['Emp_UserName']
-                print(f"User authenticated: {user['Emp_FullName']}")
-                cursor.close()
-                return user
-            else:
-                # For debugging - check if user exists at all
-                check_query = """
-                SELECT COUNT(*) as user_exists
-                FROM employees 
-                WHERE Emp_UserName = %s
-                """
-                cursor.execute(check_query, (username,))
                 result = cursor.fetchone()
+                if result['table_exists'] == 0:
+                    print("Error: Employees table does not exist!")
+                    return False
+                    
+                # Then check if necessary columns exist
+                cursor.execute("""
+                SELECT COUNT(*) as columns_exist
+                FROM information_schema.COLUMNS 
+                WHERE TABLE_SCHEMA = %s 
+                AND TABLE_NAME = 'employees' 
+                AND COLUMN_NAME IN ('Emp_UserName', 'Emp_Password')
+                """, (self.rds_config['database'],))
                 
-                if result['user_exists'] > 0:
-                    print(f"User {username} exists but password was incorrect")
+                result = cursor.fetchone()
+                if result['columns_exist'] < 2:
+                    print("Error: Username/password columns don't fully exist in employees table!")
+                    return False
+                    
+                # Now try authentication
+                query = """
+                SELECT Emp_ID, Emp_FullName, Emp_MacAddress, Emp_Admin, Emp_UserName
+                FROM employees 
+                WHERE Emp_UserName = %s AND Emp_Password = %s
+                """
+                
+                print(f"Executing authentication query with username: {username}")
+                cursor.execute(query, (username, password))
+                user = cursor.fetchone()
+                
+                if user:
+                    # Add login flag
+                    user['is_logged_in'] = True
+                    # For fallback authentication in UI
+                    user['username'] = user['Emp_UserName']
+                    print(f"User authenticated: {user['Emp_FullName']}")
+                    return user
                 else:
-                    print(f"User {username} does not exist in database")
-                
-                cursor.close()
-                return False
-                
+                    # For debugging - check if user exists at all
+                    check_query = """
+                    SELECT COUNT(*) as user_exists
+                    FROM employees 
+                    WHERE Emp_UserName = %s
+                    """
+                    cursor.execute(check_query, (username,))
+                    result = cursor.fetchone()
+                    
+                    if result['user_exists'] > 0:
+                        print(f"User {username} exists but password was incorrect")
+                    else:
+                        print(f"User {username} does not exist in database")
+                    
+                    return False
+                    
         except mysql.connector.Error as e:
             print(f"Database error in authenticate: {str(e)}")
             return False
@@ -143,15 +139,14 @@ class DatabaseManager:
             if not self.connection or not self.connection.is_connected():
                 self.connect()
                 
-            cursor = self.connection.cursor(dictionary=True)
-            query = """
-            SELECT Emp_ID, Emp_FullName, Emp_MacAddress, Emp_Admin 
-            FROM employees 
-            WHERE Emp_UserName = %s AND Emp_Password = %s
-            """
-            cursor.execute(query, (username, password))
-            user = cursor.fetchone()
-            cursor.close()
+            with self.connection.cursor(dictionary=True) as cursor:
+                query = """
+                SELECT Emp_ID, Emp_FullName, Emp_MacAddress, Emp_Admin 
+                FROM employees 
+                WHERE Emp_UserName = %s AND Emp_Password = %s
+                """
+                cursor.execute(query, (username, password))
+                user = cursor.fetchone()
             
             if not user:
                 return False, "Invalid username or password"
@@ -175,18 +170,17 @@ class DatabaseManager:
             if not self.connection or not self.connection.is_connected():
                 self.connect()
                 
-            cursor = self.connection.cursor(dictionary=True)
-            query = """
-            SELECT e.Emp_ID, e.Emp_FullName, e.Emp_NikName
-            FROM employees e
-            JOIN jobs j ON e.Emp_JobID = j.Job_ID
-            WHERE j.Department_ID = 4
-            AND e.Emp_Active_In = 1
-            ORDER BY e.Emp_FullName
-            """
-            cursor.execute(query)
-            photographers = cursor.fetchall()
-            cursor.close()
+            with self.connection.cursor(dictionary=True) as cursor:
+                query = """
+                SELECT e.Emp_ID, e.Emp_FullName, e.Emp_NikName
+                FROM employees e
+                JOIN jobs j ON e.Emp_JobID = j.Job_ID
+                WHERE j.Department_ID = 4
+                AND e.Emp_Active_In = 1
+                ORDER BY e.Emp_FullName
+                """
+                cursor.execute(query)
+                photographers = cursor.fetchall()
             
             return photographers
         except mysql.connector.Error as e:
@@ -204,29 +198,28 @@ class DatabaseManager:
             if not self.connection or not self.connection.is_connected():
                 self.connect()
                 
-            cursor = self.connection.cursor(dictionary=True)
-            
-            # If no date is selected, use today's date
-            if self.selected_date is None:
-                self.selected_date = date.today().strftime('%Y-%m-%d')
-            
-            # Get orders based on the selected date
-            query = """
-            SELECT 
-                Order_Num_ID as order_id, 
-                Order_Num as order_number,
-                Customer_ID as customer_id, 
-                Order_Date as order_date,
-                OrderType as order_type,
-                Creator_User as creator
-            FROM f_order
-            WHERE DATE(Order_Date) = %s
-            AND Cancel_Order = 0
-            ORDER BY Order_TimeStamp DESC
-            """
-            cursor.execute(query, (self.selected_date,))
-            orders = cursor.fetchall()
-            cursor.close()
+            with self.connection.cursor(dictionary=True) as cursor:
+                
+                # If no date is selected, use today's date
+                if self.selected_date is None:
+                    self.selected_date = date.today().strftime('%Y-%m-%d')
+                
+                # Get orders based on the selected date
+                query = """
+                SELECT 
+                    Order_Num_ID as order_id, 
+                    Order_Num as order_number,
+                    Customer_ID as customer_id, 
+                    Order_Date as order_date,
+                    OrderType as order_type,
+                    Creator_User as creator
+                FROM f_order
+                WHERE DATE(Order_Date) = %s
+                AND Cancel_Order = 0
+                ORDER BY Order_TimeStamp DESC
+                """
+                cursor.execute(query, (self.selected_date,))
+                orders = cursor.fetchall()
             
             return orders
         except mysql.connector.Error as e:
@@ -244,66 +237,65 @@ class DatabaseManager:
             if not self.connection or not self.connection.is_connected():
                 self.connect()
                 
-            cursor = self.connection.cursor(dictionary=True)
-            today = date.today().strftime('%Y-%m-%d')
-            
-            # Check if the uploads table has the photographer columns
-            check_query = """
-            SELECT COUNT(*) as column_exists 
-            FROM information_schema.COLUMNS 
-            WHERE TABLE_SCHEMA = %s 
-            AND TABLE_NAME = 'uploads' 
-            AND COLUMN_NAME = 'main_photographer_id'
-            """
-            cursor.execute(check_query, (self.rds_config['database'],))
-            result = cursor.fetchone()
-            
-            # If the column doesn't exist, use a simplified query
-            if result['column_exists'] == 0:
-                query = """
-                SELECT 
-                    o.Order_Num_ID as order_id, 
-                    o.Order_Num as order_number,
-                    o.Customer_ID as customer_id, 
-                    o.Order_Date as order_date,
-                    o.OrderType as order_type,
-                    u.upload_timestamp as upload_time,
-                    u.file_count as file_count
-                FROM f_order o
-                JOIN uploads u ON o.Order_Num = u.order_number
-                WHERE DATE(u.upload_timestamp) = %s
-                ORDER BY u.upload_timestamp DESC
+            with self.connection.cursor(dictionary=True) as cursor:
+                today = date.today().strftime('%Y-%m-%d')
+                
+                # Check if the uploads table has the photographer columns
+                check_query = """
+                SELECT COUNT(*) as column_exists 
+                FROM information_schema.COLUMNS 
+                WHERE TABLE_SCHEMA = %s 
+                AND TABLE_NAME = 'uploads' 
+                AND COLUMN_NAME = 'main_photographer_id'
                 """
-                cursor.execute(query, (today,))
-            else:
-                # Full query with photographer information
-                query = """
-                SELECT 
-                    o.Order_Num_ID as order_id, 
-                    o.Order_Num as order_number,
-                    o.Customer_ID as customer_id, 
-                    o.Order_Date as order_date,
-                    o.OrderType as order_type,
-                    u.upload_timestamp as upload_time,
-                    u.file_count as file_count,
-                    u.main_photographer_id as main_photographer_id,
-                    u.assistant_photographer_id as assistant_photographer_id,
-                    u.video_photographer_id as video_photographer_id,
-                    e1.Emp_FullName as main_photographer_name,
-                    e2.Emp_FullName as assistant_photographer_name,
-                    e3.Emp_FullName as video_photographer_name
-                FROM f_order o
-                JOIN uploads u ON o.Order_Num = u.order_number
-                LEFT JOIN employees e1 ON u.main_photographer_id = e1.Emp_ID
-                LEFT JOIN employees e2 ON u.assistant_photographer_id = e2.Emp_ID
-                LEFT JOIN employees e3 ON u.video_photographer_id = e3.Emp_ID
-                WHERE DATE(u.upload_timestamp) = %s
-                ORDER BY u.upload_timestamp DESC
-                """
-                cursor.execute(query, (today,))
-            
-            orders = cursor.fetchall()
-            cursor.close()
+                cursor.execute(check_query, (self.rds_config['database'],))
+                result = cursor.fetchone()
+                
+                # If the column doesn't exist, use a simplified query
+                if result['column_exists'] == 0:
+                    query = """
+                    SELECT 
+                        o.Order_Num_ID as order_id, 
+                        o.Order_Num as order_number,
+                        o.Customer_ID as customer_id, 
+                        o.Order_Date as order_date,
+                        o.OrderType as order_type,
+                        u.upload_timestamp as upload_time,
+                        u.file_count as file_count
+                    FROM f_order o
+                    JOIN uploads u ON o.Order_Num = u.order_number
+                    WHERE DATE(u.upload_timestamp) = %s
+                    ORDER BY u.upload_timestamp DESC
+                    """
+                    cursor.execute(query, (today,))
+                else:
+                    # Full query with photographer information
+                    query = """
+                    SELECT 
+                        o.Order_Num_ID as order_id, 
+                        o.Order_Num as order_number,
+                        o.Customer_ID as customer_id, 
+                        o.Order_Date as order_date,
+                        o.OrderType as order_type,
+                        u.upload_timestamp as upload_time,
+                        u.file_count as file_count,
+                        u.main_photographer_id as main_photographer_id,
+                        u.assistant_photographer_id as assistant_photographer_id,
+                        u.video_photographer_id as video_photographer_id,
+                        e1.Emp_FullName as main_photographer_name,
+                        e2.Emp_FullName as assistant_photographer_name,
+                        e3.Emp_FullName as video_photographer_name
+                    FROM f_order o
+                    JOIN uploads u ON o.Order_Num = u.order_number
+                    LEFT JOIN employees e1 ON u.main_photographer_id = e1.Emp_ID
+                    LEFT JOIN employees e2 ON u.assistant_photographer_id = e2.Emp_ID
+                    LEFT JOIN employees e3 ON u.video_photographer_id = e3.Emp_ID
+                    WHERE DATE(u.upload_timestamp) = %s
+                    ORDER BY u.upload_timestamp DESC
+                    """
+                    cursor.execute(query, (today,))
+                
+                orders = cursor.fetchall()
             
             return orders
         except mysql.connector.Error as e:
@@ -326,80 +318,79 @@ class DatabaseManager:
             if not self.connection or not self.connection.is_connected():
                 self.connect()
                 
-            cursor = self.connection.cursor(dictionary=True)
-            
-            # Check if the uploads table has the photographer columns
-            check_query = """
-            SELECT COUNT(*) as column_exists 
-            FROM information_schema.COLUMNS 
-            WHERE TABLE_SCHEMA = %s 
-            AND TABLE_NAME = 'uploads' 
-            AND COLUMN_NAME = 'main_photographer_id'
-            """
-            cursor.execute(check_query, (self.rds_config['database'],))
-            result = cursor.fetchone()
-            
-            # Build the query based on existing schema
-            if result['column_exists'] == 0:
-                query = """
-                SELECT 
-                    o.Order_Num_ID as order_id, 
-                    o.Order_Num as order_number,
-                    o.Customer_ID as customer_id, 
-                    o.Order_Date as order_date,
-                    o.OrderType as order_type,
-                    u.upload_timestamp as upload_time,
-                    u.file_count as file_count
-                FROM f_order o
-                JOIN uploads u ON o.Order_Num = u.order_number
-                WHERE 1=1
+            with self.connection.cursor(dictionary=True) as cursor:
+                
+                # Check if the uploads table has the photographer columns
+                check_query = """
+                SELECT COUNT(*) as column_exists 
+                FROM information_schema.COLUMNS 
+                WHERE TABLE_SCHEMA = %s 
+                AND TABLE_NAME = 'uploads' 
+                AND COLUMN_NAME = 'main_photographer_id'
                 """
-            else:
-                query = """
-                SELECT 
-                    o.Order_Num_ID as order_id, 
-                    o.Order_Num as order_number,
-                    o.Customer_ID as customer_id, 
-                    o.Order_Date as order_date,
-                    o.OrderType as order_type,
-                    u.upload_timestamp as upload_time,
-                    u.file_count as file_count,
-                    u.main_photographer_id as main_photographer_id,
-                    u.assistant_photographer_id as assistant_photographer_id,
-                    u.video_photographer_id as video_photographer_id,
-                    e1.Emp_FullName as main_photographer_name,
-                    e2.Emp_FullName as assistant_photographer_name,
-                    e3.Emp_FullName as video_photographer_name
-                FROM f_order o
-                JOIN uploads u ON o.Order_Num = u.order_number
-                LEFT JOIN employees e1 ON u.main_photographer_id = e1.Emp_ID
-                LEFT JOIN employees e2 ON u.assistant_photographer_id = e2.Emp_ID
-                LEFT JOIN employees e3 ON u.video_photographer_id = e3.Emp_ID
-                WHERE 1=1
-                """
+                cursor.execute(check_query, (self.rds_config['database'],))
+                result = cursor.fetchone()
                 
-            # Add filter conditions and parameters
-            params = []
-            
-            if from_date:
-                query += " AND DATE(u.upload_timestamp) >= %s"
-                params.append(from_date)
+                # Build the query based on existing schema
+                if result['column_exists'] == 0:
+                    query = """
+                    SELECT 
+                        o.Order_Num_ID as order_id, 
+                        o.Order_Num as order_number,
+                        o.Customer_ID as customer_id, 
+                        o.Order_Date as order_date,
+                        o.OrderType as order_type,
+                        u.upload_timestamp as upload_time,
+                        u.file_count as file_count
+                    FROM f_order o
+                    JOIN uploads u ON o.Order_Num = u.order_number
+                    WHERE 1=1
+                    """
+                else:
+                    query = """
+                    SELECT 
+                        o.Order_Num_ID as order_id, 
+                        o.Order_Num as order_number,
+                        o.Customer_ID as customer_id, 
+                        o.Order_Date as order_date,
+                        o.OrderType as order_type,
+                        u.upload_timestamp as upload_time,
+                        u.file_count as file_count,
+                        u.main_photographer_id as main_photographer_id,
+                        u.assistant_photographer_id as assistant_photographer_id,
+                        u.video_photographer_id as video_photographer_id,
+                        e1.Emp_FullName as main_photographer_name,
+                        e2.Emp_FullName as assistant_photographer_name,
+                        e3.Emp_FullName as video_photographer_name
+                    FROM f_order o
+                    JOIN uploads u ON o.Order_Num = u.order_number
+                    LEFT JOIN employees e1 ON u.main_photographer_id = e1.Emp_ID
+                    LEFT JOIN employees e2 ON u.assistant_photographer_id = e2.Emp_ID
+                    LEFT JOIN employees e3 ON u.video_photographer_id = e3.Emp_ID
+                    WHERE 1=1
+                    """
+                    
+                # Add filter conditions and parameters
+                params = []
                 
-            if to_date:
-                query += " AND DATE(u.upload_timestamp) <= %s"
-                params.append(to_date)
+                if from_date:
+                    query += " AND DATE(u.upload_timestamp) >= %s"
+                    params.append(from_date)
+                    
+                if to_date:
+                    query += " AND DATE(u.upload_timestamp) <= %s"
+                    params.append(to_date)
+                    
+                if order_number:
+                    query += " AND o.Order_Num LIKE %s"
+                    params.append(f"%{order_number}%")
+                    
+                # Add order by
+                query += " ORDER BY u.upload_timestamp DESC"
                 
-            if order_number:
-                query += " AND o.Order_Num LIKE %s"
-                params.append(f"%{order_number}%")
-                
-            # Add order by
-            query += " ORDER BY u.upload_timestamp DESC"
-            
-            # Execute the query with the parameters
-            cursor.execute(query, params)
-            uploads = cursor.fetchall()
-            cursor.close()
+                # Execute the query with the parameters
+                cursor.execute(query, params)
+                uploads = cursor.fetchall()
             
             return uploads
             
@@ -421,72 +412,70 @@ class DatabaseManager:
             if not self.connection or not self.connection.is_connected():
                 self.connect()
                 
-            cursor = self.connection.cursor(dictionary=True)
-            
-            # Get order basic details
-            order_query = """
-            SELECT 
-                Order_Num_ID as order_id,
-                Order_Num as order_number,
-                Customer_ID as customer_id, 
-                Order_Date as order_date,
-                OrderType as order_type,
-                Creator_User as creator,
-                GoogleDriveLink as google_drive_link,
-                Booking_Note as booking_note
-            FROM f_order
-            WHERE Order_Num = %s
-            """
-            cursor.execute(order_query, (order_number,))
-            order_details = cursor.fetchone()
-            
-            # Check if the uploads table has the photographer columns
-            check_query = """
-            SELECT COUNT(*) as column_exists 
-            FROM information_schema.COLUMNS 
-            WHERE TABLE_SCHEMA = %s 
-            AND TABLE_NAME = 'uploads' 
-            AND COLUMN_NAME = 'main_photographer_id'
-            """
-            cursor.execute(check_query, (self.rds_config['database'],))
-            result = cursor.fetchone()
-            
-            # Get upload information, adapt query based on schema
-            if result['column_exists'] == 0:
-                upload_query = """
+            with self.connection.cursor(dictionary=True) as cursor:
+                
+                # Get order basic details
+                order_query = """
                 SELECT 
-                    upload_id,
-                    file_count, 
-                    upload_timestamp
-                FROM uploads
-                WHERE order_number = %s
-                ORDER BY upload_timestamp DESC
+                    Order_Num_ID as order_id,
+                    Order_Num as order_number,
+                    Customer_ID as customer_id, 
+                    Order_Date as order_date,
+                    OrderType as order_type,
+                    Creator_User as creator,
+                    GoogleDriveLink as google_drive_link,
+                    Booking_Note as booking_note
+                FROM f_order
+                WHERE Order_Num = %s
                 """
-                cursor.execute(upload_query, (order_number,))
-            else:
-                upload_query = """
-                SELECT 
-                    upload_id,
-                    file_count, 
-                    upload_timestamp,
-                    main_photographer_id,
-                    assistant_photographer_id,
-                    video_photographer_id,
-                    e1.Emp_FullName as main_photographer_name,
-                    e2.Emp_FullName as assistant_photographer_name,
-                    e3.Emp_FullName as video_photographer_name
-                FROM uploads
-                LEFT JOIN employees e1 ON uploads.main_photographer_id = e1.Emp_ID
-                LEFT JOIN employees e2 ON uploads.assistant_photographer_id = e2.Emp_ID
-                LEFT JOIN employees e3 ON uploads.video_photographer_id = e3.Emp_ID
-                WHERE order_number = %s
-                ORDER BY upload_timestamp DESC
+                cursor.execute(order_query, (order_number,))
+                order_details = cursor.fetchone()
+                
+                # Check if the uploads table has the photographer columns
+                check_query = """
+                SELECT COUNT(*) as column_exists 
+                FROM information_schema.COLUMNS 
+                WHERE TABLE_SCHEMA = %s 
+                AND TABLE_NAME = 'uploads' 
+                AND COLUMN_NAME = 'main_photographer_id'
                 """
-                cursor.execute(upload_query, (order_number,))
-            
-            upload_info = cursor.fetchone()
-            
-            cursor.close()
+                cursor.execute(check_query, (self.rds_config['database'],))
+                result = cursor.fetchone()
+                
+                # Get upload information, adapt query based on schema
+                if result['column_exists'] == 0:
+                    upload_query = """
+                    SELECT 
+                        upload_id,
+                        file_count, 
+                        upload_timestamp
+                    FROM uploads
+                    WHERE order_number = %s
+                    ORDER BY upload_timestamp DESC
+                    """
+                    cursor.execute(upload_query, (order_number,))
+                else:
+                    upload_query = """
+                    SELECT 
+                        upload_id,
+                        file_count, 
+                        upload_timestamp,
+                        main_photographer_id,
+                        assistant_photographer_id,
+                        video_photographer_id,
+                        e1.Emp_FullName as main_photographer_name,
+                        e2.Emp_FullName as assistant_photographer_name,
+                        e3.Emp_FullName as video_photographer_name
+                    FROM uploads
+                    LEFT JOIN employees e1 ON uploads.main_photographer_id = e1.Emp_ID
+                    LEFT JOIN employees e2 ON uploads.assistant_photographer_id = e2.Emp_ID
+                    LEFT JOIN employees e3 ON uploads.video_photographer_id = e3.Emp_ID
+                    WHERE order_number = %s
+                    ORDER BY upload_timestamp DESC
+                    """
+                    cursor.execute(upload_query, (order_number,))
+                
+                upload_info = cursor.fetchone()
             
             return {
                 'order': order_details,
@@ -514,76 +503,76 @@ class DatabaseManager:
             if not self.connection or not self.connection.is_connected():
                 self.connect()
                 
-            cursor = self.connection.cursor()
-            
-            # Check if the uploads table has the photographer columns
-            check_query = """
-            SELECT COUNT(*) as column_exists 
-            FROM information_schema.COLUMNS 
-            WHERE TABLE_SCHEMA = %s 
-            AND TABLE_NAME = 'uploads' 
-            AND COLUMN_NAME = 'main_photographer_id'
-            """
-            cursor.execute(check_query, (self.rds_config['database'],))
-            result = cursor.fetchone()
-            
-            # Handle the result correctly - fetchone() returns a tuple with dictionary parameter names
-            # We can safely access the first element as it's the COUNT(*) result
-            column_exists = result[0] if result else 0
-            
-            # Convert parameters to appropriate types
-            try:
-                # Convert to integers if not None
-                main_id = int(main_photographer_id) if main_photographer_id is not None else None
-                assistant_id = int(assistant_photographer_id) if assistant_photographer_id is not None else None
-                video_id = int(video_photographer_id) if video_photographer_id is not None else None
+            with self.connection.cursor() as cursor:
                 
-                # Debug output
-                print(f"Converting photographer IDs: {main_photographer_id} -> {main_id}, " 
-                    f"{assistant_photographer_id} -> {assistant_id}, {video_photographer_id} -> {video_id}")
-            except (ValueError, TypeError) as e:
-                print(f"Error converting photographer IDs: {e}")
-                main_id = None
-                assistant_id = None
-                video_id = None
-            
-            # If the columns don't exist, use a simplified query
-            if column_exists == 0:
-                upload_query = """
-                INSERT INTO uploads (
-                    order_number, 
-                    file_count, 
-                    upload_timestamp
-                )
-                VALUES (%s, %s, NOW())
+                # Check if the uploads table has the photographer columns
+                check_query = """
+                SELECT COUNT(*) as column_exists 
+                FROM information_schema.COLUMNS 
+                WHERE TABLE_SCHEMA = %s 
+                AND TABLE_NAME = 'uploads' 
+                AND COLUMN_NAME = 'main_photographer_id'
                 """
-                cursor.execute(upload_query, (order_number, file_count))
-            else:
-                # Full query with photographer info
-                upload_query = """
-                INSERT INTO uploads (
-                    order_number, 
-                    file_count, 
-                    upload_timestamp, 
-                    main_photographer_id,
-                    assistant_photographer_id,
-                    video_photographer_id
-                )
-                VALUES (%s, %s, NOW(), %s, %s, %s)
-                """
+                cursor.execute(check_query, (self.rds_config['database'],))
+                result = cursor.fetchone()
                 
-                # Execute the query with proper parameters
-                print(f"Executing query with params: {order_number}, {file_count}, {main_id}, {assistant_id}, {video_id}")
-                cursor.execute(upload_query, (
-                    order_number, 
-                    file_count, 
-                    main_id, 
-                    assistant_id, 
-                    video_id
-                ))
+                # Handle the result correctly - fetchone() returns a tuple with dictionary parameter names
+                # We can safely access the first element as it's the COUNT(*) result
+                column_exists = result[0] if result else 0
+                
+                # Convert parameters to appropriate types
+                try:
+                    # Convert to integers if not None
+                    main_id = int(main_photographer_id) if main_photographer_id is not None else None
+                    assistant_id = int(assistant_photographer_id) if assistant_photographer_id is not None else None
+                    video_id = int(video_photographer_id) if video_photographer_id is not None else None
+                    
+                    # Debug output
+                    print(f"Converting photographer IDs: {main_photographer_id} -> {main_id}, " 
+                        f"{assistant_photographer_id} -> {assistant_id}, {video_photographer_id} -> {video_id}")
+                except (ValueError, TypeError) as e:
+                    print(f"Error converting photographer IDs: {e}")
+                    main_id = None
+                    assistant_id = None
+                    video_id = None
+                
+                # If the columns don't exist, use a simplified query
+                if column_exists == 0:
+                    upload_query = """
+                    INSERT INTO uploads (
+                        order_number, 
+                        file_count, 
+                        upload_timestamp
+                    )
+                    VALUES (%s, %s, NOW())
+                    """
+                    cursor.execute(upload_query, (order_number, file_count))
+                else:
+                    # Full query with photographer info
+                    upload_query = """
+                    INSERT INTO uploads (
+                        order_number, 
+                        file_count, 
+                        upload_timestamp, 
+                        main_photographer_id,
+                        assistant_photographer_id,
+                        video_photographer_id
+                    )
+                    VALUES (%s, %s, NOW(), %s, %s, %s)
+                    """
+                    
+                    # Execute the query with proper parameters
+                    print(f"Executing query with params: {order_number}, {file_count}, {main_id}, {assistant_id}, {video_id}")
+                    cursor.execute(upload_query, (
+                        order_number, 
+                        file_count, 
+                        main_id, 
+                        assistant_id, 
+                        video_id
+                    ))
+                
+                self.connection.commit()
             
-            self.connection.commit()
-            cursor.close()
             return True
         except mysql.connector.Error as e:
             print(f"Error recording upload: {e}")
@@ -606,51 +595,48 @@ class DatabaseManager:
             if not self.connection or not self.connection.is_connected():
                 self.connect()
                 
-            cursor = self.connection.cursor(dictionary=True)
-            
-            # Try to find an admin user account
-            query = """
-            SELECT Emp_ID, Emp_FullName, Emp_MacAddress, Emp_Admin, Emp_UserName
-            FROM employees 
-            WHERE Emp_Admin = 1 AND Emp_Active_In = 1
-            LIMIT 1
-            """
-            
-            cursor.execute(query)
-            admin = cursor.fetchone()
-            
-            if admin:
-                # Add login flag
-                admin['is_logged_in'] = True
-                # For fallback authentication in UI
-                admin['username'] = admin['Emp_UserName']
-                print(f"Auto-authenticated as admin: {admin['Emp_FullName']}")
-                cursor.close()
-                return admin
-            else:
-                # Try to find any active user
+            with self.connection.cursor(dictionary=True) as cursor:
+                
+                # Try to find an admin user account
                 query = """
                 SELECT Emp_ID, Emp_FullName, Emp_MacAddress, Emp_Admin, Emp_UserName
                 FROM employees 
-                WHERE Emp_Active_In = 1
+                WHERE Emp_Admin = 1 AND Emp_Active_In = 1
                 LIMIT 1
                 """
                 
                 cursor.execute(query)
-                user = cursor.fetchone()
+                admin = cursor.fetchone()
                 
-                if user:
+                if admin:
                     # Add login flag
-                    user['is_logged_in'] = True
+                    admin['is_logged_in'] = True
                     # For fallback authentication in UI
-                    user['username'] = user['Emp_UserName']
-                    print(f"Auto-authenticated as user: {user['Emp_FullName']}")
-                    cursor.close()
-                    return user
+                    admin['username'] = admin['Emp_UserName']
+                    print(f"Auto-authenticated as admin: {admin['Emp_FullName']}")
+                    return admin
                 else:
-                    print("No suitable user found for auto-authentication")
-                    cursor.close()
-                    return False
+                    # Try to find any active user
+                    query = """
+                    SELECT Emp_ID, Emp_FullName, Emp_MacAddress, Emp_Admin, Emp_UserName
+                    FROM employees 
+                    WHERE Emp_Active_In = 1
+                    LIMIT 1
+                    """
+                    
+                    cursor.execute(query)
+                    user = cursor.fetchone()
+                    
+                    if user:
+                        # Add login flag
+                        user['is_logged_in'] = True
+                        # For fallback authentication in UI
+                        user['username'] = user['Emp_UserName']
+                        print(f"Auto-authenticated as user: {user['Emp_FullName']}")
+                        return user
+                    else:
+                        print("No suitable user found for auto-authentication")
+                        return False
                 
         except mysql.connector.Error as e:
             print(f"Database error in auto_authenticate: {str(e)}")
@@ -663,13 +649,12 @@ class DatabaseManager:
         try:
             if not self.connection or not self.connection.is_connected():
                 self.connect()
-            cursor = self.connection.cursor(dictionary=True)
-            query = """
-            SELECT DeviceID, DeviceName, local_storage_path FROM devices WHERE Mac_Address = %s
-            """
-            cursor.execute(query, (mac_address,))
-            result = cursor.fetchone()
-            cursor.close()
+            with self.connection.cursor(dictionary=True) as cursor:
+                query = """
+                SELECT DeviceID, DeviceName, local_storage_path FROM devices WHERE Mac_Address = %s
+                """
+                cursor.execute(query, (mac_address,))
+                result = cursor.fetchone()
             return result if result else None
         except Exception as e:
             print(f"Error getting device info: {e}")
@@ -682,35 +667,34 @@ class DatabaseManager:
         try:
             if not self.connection or not self.connection.is_connected():
                 self.connect()
-            cursor = self.connection.cursor()
-            
-            # First check if local_storage_path column exists
-            check_query = """
-            SELECT COUNT(*) as column_exists 
-            FROM information_schema.COLUMNS 
-            WHERE TABLE_SCHEMA = %s 
-            AND TABLE_NAME = 'devices' 
-            AND COLUMN_NAME = 'local_storage_path'
-            """
-            cursor.execute(check_query, (self.rds_config['database'],))
-            result = cursor.fetchone()
-            column_exists = result[0] if result else 0
-            
-            if column_exists == 0:
-                # Add the column if it doesn't exist
-                alter_query = """
-                ALTER TABLE devices ADD COLUMN local_storage_path VARCHAR(500) NULL
+            with self.connection.cursor() as cursor:
+                
+                # First check if local_storage_path column exists
+                check_query = """
+                SELECT COUNT(*) as column_exists 
+                FROM information_schema.COLUMNS 
+                WHERE TABLE_SCHEMA = %s 
+                AND TABLE_NAME = 'devices' 
+                AND COLUMN_NAME = 'local_storage_path'
                 """
-                cursor.execute(alter_query)
-                print("Added local_storage_path column to devices table")
-            
-            # Update the storage path
-            update_query = """
-            UPDATE devices SET local_storage_path = %s WHERE Mac_Address = %s
-            """
-            cursor.execute(update_query, (storage_path, mac_address))
-            self.connection.commit()
-            cursor.close()
+                cursor.execute(check_query, (self.rds_config['database'],))
+                result = cursor.fetchone()
+                column_exists = result[0] if result else 0
+                
+                if column_exists == 0:
+                    # Add the column if it doesn't exist
+                    alter_query = """
+                    ALTER TABLE devices ADD COLUMN local_storage_path VARCHAR(500) NULL
+                    """
+                    cursor.execute(alter_query)
+                    print("Added local_storage_path column to devices table")
+                
+                # Update the storage path
+                update_query = """
+                UPDATE devices SET local_storage_path = %s WHERE Mac_Address = %s
+                """
+                cursor.execute(update_query, (storage_path, mac_address))
+                self.connection.commit()
             return True
         except Exception as e:
             print(f"Error updating device storage path: {e}")

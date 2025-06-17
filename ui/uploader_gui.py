@@ -841,7 +841,6 @@ class S3UploaderGUI(QMainWindow):
             values = (user, category, action, details, ip_address, device_id, emp_id)
             cursor.execute(query, values)
             self.db_manager.connection.commit()
-            cursor.close()
             
             # Print to console for debugging
             print(f"[ACTIVITY] {user} ({category}/{action}): {details}")
@@ -879,7 +878,6 @@ class S3UploaderGUI(QMainWindow):
             if result['table_exists'] == 0:
                 # Table doesn't exist yet
                 self.activity_table.setRowCount(0)
-                cursor.close()
                 return
             
             # Build query with filters
@@ -921,7 +919,6 @@ class S3UploaderGUI(QMainWindow):
             # Execute query
             cursor.execute(query, params)
             logs = cursor.fetchall()
-            cursor.close()
             
             # Clear the table
             self.activity_table.setRowCount(0)
@@ -1693,10 +1690,7 @@ class S3UploaderGUI(QMainWindow):
         
         # Stop existing uploader if running
         if task.get('uploader') and task['uploader'].isRunning():
-            task['uploader'].stop()
-            # Wait for thread to finish
-            if not task['uploader'].wait(1000):
-                self.log_message("Warning: Uploader thread did not stop properly")
+            self.cleanup_task_thread(task)
         
         # Delete the state file if it exists
         state_file = Path.home() / '.aws_uploader' / f"task_state_{task['order_number']}.json"
@@ -1749,7 +1743,7 @@ class S3UploaderGUI(QMainWindow):
         # Cancel only if task is running or paused
         if task['status'] in ['running', 'paused'] and task.get('uploader'):
             # Stop the uploader
-            task['uploader'].stop()
+            self.cleanup_task_thread(task)
             
             # Update task status
             task['status'] = 'cancelled'
@@ -1824,7 +1818,7 @@ class S3UploaderGUI(QMainWindow):
         # Stop task if running
         if task['status'] in ['running', 'paused'] and task.get('uploader'):
             # Stop the uploader
-            task['uploader'].stop()
+            self.cleanup_task_thread(task)
             self.log_message(f"Stopped running task for order {task['order_number']}")
             
         # Ask if the task should also be deleted from the database
@@ -1871,12 +1865,6 @@ class S3UploaderGUI(QMainWindow):
                 query = f"DELETE FROM upload_tasks WHERE {id_column} = %s"
                 cursor.execute(query, (task['db_id'],))
                 self.db_manager.connection.commit()
-                cursor.close()
-                
-                self.log_message(f"Deleted task for order {task['order_number']} from database")
-                self.log_activity("task", "delete_db", 
-                                f"Deleted task for order {task['order_number']} from database", 
-                                self.user_info.get('Emp_FullName'))
             except Exception as e:
                 self.log_message(f"Error deleting task from database: {str(e)}")
                 import traceback
@@ -2080,7 +2068,6 @@ class S3UploaderGUI(QMainWindow):
                 
                 cursor.execute(query, tuple(values))
                 self.db_manager.connection.commit()
-                cursor.close()
                 
                 return task['db_id']
             
@@ -2145,7 +2132,6 @@ class S3UploaderGUI(QMainWindow):
                 cursor.execute(query, tuple(values))
                 db_id = cursor.lastrowid
                 self.db_manager.connection.commit()
-                cursor.close()
                 
                 # Store database ID in task
                 task['db_id'] = db_id
@@ -2448,8 +2434,6 @@ class S3UploaderGUI(QMainWindow):
                             except Exception as e:
                                 print(f"Failed to add task {task['id']} to queue: {str(e)}")
                 
-                cursor.close()
-                
         except Exception as e:
             print(f"Error loading tasks from database: {str(e)}")
             import traceback
@@ -2539,7 +2523,6 @@ class S3UploaderGUI(QMainWindow):
             result = cursor.fetchone()
             self.log_message(f"Number of users in database: {result[0]}")
             
-            cursor.close()
         except Exception as e:
             self.log_message(f"Error checking database structure: {str(e)}")
             import traceback
@@ -2693,7 +2676,6 @@ class S3UploaderGUI(QMainWindow):
             columns = cursor.fetchall()
             if not columns:
                 self.log_message("Error: Could not find ID column in upload_tasks table")
-                cursor.close()
                 return
                 
             # Use the first ID column found (prioritize task_id if available)
@@ -2712,7 +2694,6 @@ class S3UploaderGUI(QMainWindow):
             # Execute query
             cursor.execute(query, (today,))
             results = cursor.fetchall()
-            cursor.close()
             
             self.log_message(f"Found {len(results)} uploads today")
             
@@ -2777,7 +2758,6 @@ class S3UploaderGUI(QMainWindow):
             columns = cursor.fetchall()
             if not columns:
                 self.log_message("Error: Could not find ID column in upload_tasks table")
-                cursor.close()
                 return
                 
             # Use the first ID column found (prioritize task_id if available)
@@ -2815,7 +2795,6 @@ class S3UploaderGUI(QMainWindow):
             # Execute query
             cursor.execute(query, params)
             results = cursor.fetchall()
-            cursor.close()
             
             self.log_message(f"Found {len(results)} uploads matching filter criteria")
             
@@ -3046,11 +3025,6 @@ class S3UploaderGUI(QMainWindow):
                 self.log_message("Created activity_log table")
             
             self.log_message("Database schema check completed")
-            cursor.close()
-            
-            # Run a separate check for user authentication schema
-            self.check_db_schema()
-            
         except Exception as e:
             self.log_message(f"Error initializing database schema: {str(e)}")
             import traceback
@@ -3221,7 +3195,6 @@ class S3UploaderGUI(QMainWindow):
             
             cursor.execute(query, (photographer_id,))
             result = cursor.fetchone()
-            cursor.close()
             
             if result and 'Emp_FullName' in result:
                 return result['Emp_FullName']
@@ -3378,7 +3351,7 @@ class S3UploaderGUI(QMainWindow):
             for task in self.upload_tasks:
                 if task.get('status') == 'running' and task.get('uploader') and task['uploader'].isRunning():
                     self.log_message(f"Stopping task for order {task.get('order_number', 'unknown')}")
-                    task['uploader'].stop()
+                    self.cleanup_task_thread(task)
             
             # Close database connection
             if hasattr(self, 'db_manager') and self.db_manager:
@@ -3734,14 +3707,7 @@ class S3UploaderGUI(QMainWindow):
             
             # Clean up previous thread if it exists
             if task.get('uploader') is not None:
-                try:
-                    if task['uploader'].isRunning():
-                        task['uploader'].stop()
-                        task['uploader'].wait(1000)
-                    task['uploader'] = None
-                except Exception as e:
-                    self.log_message(f"Warning: Error cleaning up old thread: {str(e)}")
-                    task['uploader'] = None
+                self.cleanup_task_thread(task)
             
             # Create a new uploader
             from utils.background_uploader import BackgroundUploader
@@ -3880,3 +3846,21 @@ class S3UploaderGUI(QMainWindow):
             
         except Exception as e:
             self.log_message(f"Error handling task status change: {str(e)}")
+
+    def cleanup_task_thread(self, task):
+        """Safely cleanup task thread"""
+        if not task.get('uploader'):
+            return
+        uploader = task['uploader']
+        try:
+            if uploader.isRunning():
+                uploader.stop()
+                if not uploader.wait(5000):  # 5 seconds
+                    self.log_message(f"Warning: Force terminating thread for task {task['id']}")
+                    uploader.terminate()
+                    uploader.wait(2000)
+            uploader.disconnect()
+            task['uploader'] = None
+        except Exception as e:
+            self.log_message(f"Error cleaning up thread: {str(e)}")
+            task['uploader'] = None
