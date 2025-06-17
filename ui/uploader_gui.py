@@ -76,6 +76,12 @@ class S3UploaderGUI(QMainWindow):
         self.device_name = None
         self.local_storage_path = None
         
+        # Initialize UI update system
+        self.pending_ui_updates = set()
+        self.ui_update_timer = QTimer()
+        self.ui_update_timer.timeout.connect(self.batch_update_ui)
+        self.ui_update_timer.start(1000)  # Update every second
+        
         # Initialize UI
         self.init_ui()
         
@@ -1408,57 +1414,50 @@ class S3UploaderGUI(QMainWindow):
             self.log_message(traceback.format_exc())
     
     def update_task_progress(self, task_id, current, total):
-        """
-        Update progress for a specific task
-        
-        Args:
-            task_id (int): Task ID
-            current (int): Current progress (files completed)
-            total (int): Total items (total files)
-        """
-        # Find the task
-        task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
-        if not task:
-            return
-        
-        # Safety check for invalid values
-        if total <= 0:
-            self.log_message(f"Warning: Total value for task {task_id} is zero or negative: {total}")
-            percentage = task.get('progress', 0)
-        else:
-            # Calculate percentage based on files completed
-            percentage = round((current / total) * 100)
-        
-        # Clamp percentage to valid range
-        percentage = max(0, min(100, percentage))
-        task['progress'] = percentage
-        
-        # Get additional progress info from uploader if available
-        progress_details = ""
-        if hasattr(task, 'uploader') and task.get('uploader'):
-            uploader = task.get('uploader')
-            if hasattr(uploader, 'uploaded_file_count') and hasattr(uploader, 'total_files'):
-                files_progress = f"{uploader.uploaded_file_count + uploader.skipped_file_count}/{uploader.total_files}"
+        """Add task to pending updates instead of immediate update"""
+        try:
+            # Find the task
+            task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
+            if not task:
+                return
+            
+            # Update progress
+            if total > 0:
+                task['progress'] = int((current / total) * 100)
+            
+            # Add to pending updates
+            self.pending_ui_updates.add(task_id)
+            
+        except Exception as e:
+            self.log_message(f"Error updating task progress: {str(e)}")
+
+    def update_task_list(self, task):
+        """Add task to pending updates instead of immediate update"""
+        self.pending_ui_updates.add(task['id'])
+
+    def update_task_list_internal(self, task):
+        """Internal method to update task list item"""
+        try:
+            if 'item' not in task or not task['item']:
+                return
                 
-                # Add bytes progress if available
-                if hasattr(uploader, 'uploaded_bytes') and hasattr(uploader, 'total_bytes') and uploader.total_bytes > 0:
-                    bytes_percentage = (uploader.uploaded_bytes / uploader.total_bytes) * 100
-                    bytes_info = f"{self._format_bytes(uploader.uploaded_bytes)}/{self._format_bytes(uploader.total_bytes)}"
-                    progress_details = f" - {files_progress} files ({bytes_percentage:.1f}% data: {bytes_info})"
-                else:
-                    progress_details = f" - {files_progress} files"
-        
-        # Update the list item if it exists
-        if 'item' in task and task['item']:
-            status_text = "Uploading" if task['status'] == 'running' else task['status'].capitalize()
-            task['item'].setText(f"Task {task['id']}: Order {task['order_number']} - {status_text} ({percentage}%{progress_details})")
-        
-        # Update enhanced progress bars
-        self.update_all_progress_bars()
-        
-        # Update system tray menu
-        self.update_tray_menu()
-    
+            # Update task item text
+            status_text = {
+                'pending': '⏳',
+                'running': '▶️',
+                'paused': '⏸️',
+                'completed': '✅',
+                'cancelled': '❌'
+            }.get(task['status'], '❓')
+            
+            progress = task.get('progress', 0)
+            task['item'].setText(
+                f"{status_text} Task {task['id']}: Order {task['order_number']} - {progress}%"
+            )
+            
+        except Exception as e:
+            self.log_message(f"Error updating task list item: {str(e)}")
+
     def update_all_progress_bars(self):
         """Update all progress bars with current task information"""
         # Count tasks by status
@@ -3396,68 +3395,6 @@ class S3UploaderGUI(QMainWindow):
         except:
             return QDate.currentDate()
 
-    def update_task_list(self, task):
-        """
-        Update the UI display for a task
-        
-        Args:
-            task (dict): Task to update
-        """
-        try:
-            # Find the list item for this task
-            if 'item' in task and task['item'] is not None:
-                # Update the list item text
-                status_text = task['status'].capitalize()
-                progress = int(task.get('progress', 0))
-                
-                task['item'].setText(f"Task {task['id']}: Order {task['order_number']} - {status_text} ({progress}%)")
-            else:
-                # If item doesn't exist, create a new one
-                from PyQt5.QtWidgets import QListWidgetItem
-                from PyQt5.QtCore import Qt
-                
-                item = QListWidgetItem()
-                status_text = task['status'].capitalize()
-                progress = int(task.get('progress', 0))
-                
-                item.setText(f"Task {task['id']}: Order {task['order_number']} - {status_text} ({progress}%)")
-                item.setData(Qt.ItemDataRole.UserRole, task['id'])
-                
-                # Store the item in the task
-                task['item'] = item
-                
-                # Add to the list widget
-                self.task_list.addItem(item)
-                
-            # Update progress bar if this is a running task
-            if task['status'] == 'running':
-                # Update progress bar based on all running tasks
-                running_tasks = [t for t in self.upload_tasks if t['status'] == 'running']
-                if running_tasks:
-                    # Update enhanced progress bars for the first running task
-                    first_running_task = running_tasks[0]
-                    self.enhanced_progress_bars.update_task_progress(
-                        first_running_task["id"], 
-                        first_running_task["order_number"], 
-                        first_running_task.get("progress", 0)
-                    )
-                    
-            # Update all progress bars to reflect current state
-            self.update_all_progress_bars()
-                    
-            # Update the database if task has a database ID
-            if hasattr(task, 'db_id') and task.get('db_id') and self.db_manager.connection:
-                try:
-                    # Save task to database
-                    self.save_task_to_database(task)
-                except Exception as db_error:
-                    self.log_message(f"Warning: Could not update task in database: {str(db_error)}")
-        
-        except Exception as e:
-            self.log_message(f"Error updating task list: {str(e)}")
-            import traceback
-            self.log_message(traceback.format_exc())
-    
     def update_buttons_state(self):
         """Update the states of the task control buttons"""
         selected_items = self.task_list.selectedItems()
@@ -3937,3 +3874,21 @@ class S3UploaderGUI(QMainWindow):
         except Exception as e:
             self.log_message(f"Error getting database connection: {str(e)}")
             return self.db_manager.connection
+
+    def batch_update_ui(self):
+        """Update UI in batches for better performance"""
+        if not self.pending_ui_updates:
+            return
+        
+        try:
+            # تحديث جميع المهام المعلقة
+            for task_id in self.pending_ui_updates:
+                task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
+                if task:
+                    self.update_task_list_internal(task)
+            
+            self.pending_ui_updates.clear()
+            self.update_all_progress_bars()
+            
+        except Exception as e:
+            self.log_message(f"Error in batch UI update: {str(e)}")
