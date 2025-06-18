@@ -3807,15 +3807,27 @@ class S3UploaderGUI(QMainWindow):
         """Safely cleanup task thread"""
         if not task.get('uploader'):
             return
+        
         uploader = task['uploader']
         try:
-            if uploader.isRunning():
-                uploader.stop()
-                if not uploader.wait(5000):  # 5 seconds
-                    self.log_message(f"Warning: Force terminating thread for task {task['id']}")
-                    uploader.terminate()
-                    uploader.wait(2000)
-            uploader.disconnect()
+            # إرسال إشارة إيقاف لطيفة
+            uploader.stop()
+            # انتظار أطول مع فحص دوري (30 ثانية)
+            for _ in range(30):
+                if uploader.wait(1000):  # انتظار ثانية واحدة
+                    break
+            else:
+                # إذا لم يتوقف، احفظ الحالة أولاً
+                if hasattr(uploader, 'save_state'):
+                    try:
+                        uploader.save_state()
+                    except Exception:
+                        pass
+                self.log_message(f"Warning: Force terminating thread for task {task.get('id')}")
+                uploader.terminate()
+                uploader.wait(2000)
+            # تنظيف المراجع
+            uploader.deleteLater()
             task['uploader'] = None
         except Exception as e:
             self.log_message(f"Error cleaning up thread: {str(e)}")
