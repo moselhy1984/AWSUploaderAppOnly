@@ -19,6 +19,9 @@ from botocore.config import Config
 from PyQt5.QtCore import QThread, pyqtSignal, QMutex, QMutexLocker
 import shutil
 
+import platform
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
+
 
 class UploaderSettings:
     """Configuration settings for the uploader"""
@@ -338,6 +341,230 @@ class MockS3Client:
                 time.sleep(0.05)  # Slower upload simulation
             else:
                 time.sleep(0.001)  # Fast upload simulation
+
+
+class CrossPlatformS3PathHandler:
+    """
+    Cross-platform S3 path handler that ensures consistent forward slash usage
+    regardless of the operating system
+    """
+    
+    @staticmethod
+    def normalize_s3_path(path_str):
+        """
+        Normalize a path string to use forward slashes for S3 compatibility
+        
+        Args:
+            path_str (str): Path string to normalize
+            
+        Returns:
+            str: Normalized path with forward slashes
+        """
+        if not path_str:
+            return ""
+        
+        # Convert backslashes to forward slashes
+        normalized = path_str.replace('\\', '/')
+        
+        # Remove duplicate slashes
+        while '//' in normalized:
+            normalized = normalized.replace('//', '/')
+        
+        # Remove leading slash if present
+        if normalized.startswith('/'):
+            normalized = normalized[1:]
+        
+        # Remove trailing slash if present
+        if normalized.endswith('/'):
+            normalized = normalized[:-1]
+        
+        return normalized
+    
+    @staticmethod
+    def create_s3_key(*parts):
+        """
+        Create an S3 key from multiple path parts, ensuring forward slash usage
+        
+        Args:
+            *parts: Variable number of path parts
+            
+        Returns:
+            str: S3 key with forward slashes
+        """
+        # Filter out empty parts and convert all to strings
+        clean_parts = [str(part) for part in parts if part]
+        
+        if not clean_parts:
+            return ""
+        
+        # Join with forward slashes and normalize
+        joined = '/'.join(clean_parts)
+        return CrossPlatformS3PathHandler.normalize_s3_path(joined)
+    
+    @staticmethod
+    def get_relative_path_posix(file_path, base_path):
+        """
+        Get relative path in POSIX format (forward slashes) regardless of OS
+        
+        Args:
+            file_path (Path): File path
+            base_path (Path): Base path
+            
+        Returns:
+            str: Relative path with forward slashes
+        """
+        try:
+            # Get relative path
+            relative = file_path.relative_to(base_path)
+            
+            # Convert to POSIX format (forward slashes)
+            if platform.system() == "Windows":
+                # On Windows, convert to forward slashes
+                return str(relative).replace('\\', '/')
+            else:
+                # On Unix-like systems, already uses forward slashes
+                return str(relative)
+                
+        except ValueError:
+            # If file_path is not relative to base_path, return just the filename
+            return file_path.name
+
+
+def get_local_path_structure_cross_platform(uploader_instance):
+    """
+    Cross-platform version of get_local_path_structure that handles path separators correctly
+    
+    Args:
+        uploader_instance: BackgroundUploader instance
+        
+    Returns:
+        str: The relative path structure to use as S3 prefix
+    """
+    try:
+        # Get the local folder path
+        folder_path = Path(uploader_instance.folder_path)
+        
+        # Look for common patterns in the path structure
+        path_parts = folder_path.parts
+        
+        # Find the year folder (4-digit number starting with 20xx)
+        year_folder_index = -1
+        for i, part in enumerate(path_parts):
+            # Check if this part looks like a year (4 digits starting with 20)
+            if part.isdigit() and len(part) == 4 and part.startswith('20'):
+                year_folder_index = i
+                break
+        
+        if year_folder_index >= 0:
+            # Extract the path from the year folder onwards
+            relative_structure = Path(*path_parts[year_folder_index:])
+            uploader_instance.log.emit(f"📁 Using year-based structure: {relative_structure}")
+            # Use CrossPlatformS3PathHandler to ensure forward slashes
+            return CrossPlatformS3PathHandler.normalize_s3_path(str(relative_structure))
+        else:
+            # Fallback: look for the base folder pattern and then find year
+            base_folder_index = -1
+            for i, part in enumerate(path_parts):
+                if 'booking' in part.lower() or 'folders' in part.lower() or 'orders' in part.lower():
+                    base_folder_index = i
+                    break
+            
+            if base_folder_index >= 0:
+                # Look for year folder after base folder
+                for i in range(base_folder_index + 1, len(path_parts)):
+                    part = path_parts[i]
+                    if part.isdigit() and len(part) == 4 and part.startswith('20'):
+                        relative_structure = Path(*path_parts[i:])
+                        uploader_instance.log.emit(f"📁 Found year folder, using: {relative_structure}")
+                        return CrossPlatformS3PathHandler.normalize_s3_path(str(relative_structure))
+            
+            # If no year found in expected location, try pattern matching
+            folder_name = folder_path.name
+            parent_folder = folder_path.parent.name
+            grandparent_folder = folder_path.parent.parent.name
+            
+            # Check if grandparent looks like a year
+            if grandparent_folder.isdigit() and len(grandparent_folder) == 4 and grandparent_folder.startswith('20'):
+                relative_structure = Path(grandparent_folder) / parent_folder / folder_name
+                uploader_instance.log.emit(f"📁 Detected year structure: {relative_structure}")
+                return CrossPlatformS3PathHandler.normalize_s3_path(str(relative_structure))
+            
+            # Check if parent looks like a year
+            elif parent_folder.isdigit() and len(parent_folder) == 4 and parent_folder.startswith('20'):
+                relative_structure = Path(parent_folder) / folder_name
+                uploader_instance.log.emit(f"📁 Detected year structure: {relative_structure}")
+                return CrossPlatformS3PathHandler.normalize_s3_path(str(relative_structure))
+            
+            else:
+                # Ultimate fallback: use just the order folder
+                uploader_instance.log.emit(f"📁 No year found, using order folder only: {folder_name}")
+                return CrossPlatformS3PathHandler.normalize_s3_path(folder_name)
+                
+    except Exception as e:
+        uploader_instance.log.emit(f"⚠️ Error extracting local path structure: {str(e)}")
+        # Ultimate fallback
+        return CrossPlatformS3PathHandler.normalize_s3_path(f"Order_{uploader_instance.order_number}")
+
+
+def create_file_info_cross_platform(uploader_instance, file_path, folder_path, base_prefix):
+    """
+    Cross-platform version of _create_file_info that handles path separators correctly
+    
+    Args:
+        uploader_instance: BackgroundUploader instance
+        file_path (Path): File path
+        folder_path (Path): Folder path
+        base_prefix (str): Base prefix for S3
+        
+    Returns:
+        dict: File info dictionary
+    """
+    # Get relative path using cross-platform handler
+    relative_path_str = CrossPlatformS3PathHandler.get_relative_path_posix(file_path, folder_path)
+    relative_path = Path(relative_path_str)
+    path_parts = relative_path.parts
+    
+    # Determine file category
+    file_extension = file_path.suffix.lower()
+    file_category = 'OTHER'
+    
+    for category, extensions in uploader_instance.extension_mappings.items():
+        if file_extension in extensions:
+            file_category = category
+            break
+    
+    # Determine S3 key based on file location
+    if len(path_parts) > 1 and path_parts[0] in uploader_instance.extension_mappings:
+        # File is already in a category folder
+        category_from_path = path_parts[0]
+        rel_path_in_category = Path(*path_parts[1:])
+        
+        # Use CrossPlatformS3PathHandler to create S3 key
+        s3_key = CrossPlatformS3PathHandler.create_s3_key(
+            base_prefix, 
+            category_from_path, 
+            CrossPlatformS3PathHandler.get_relative_path_posix(rel_path_in_category, Path('.'))
+        )
+        actual_category = category_from_path
+    else:
+        # File is loose or in a non-category folder
+        s3_key = CrossPlatformS3PathHandler.create_s3_key(
+            base_prefix, 
+            file_category, 
+            relative_path_str
+        )
+        actual_category = file_category
+    
+    file_size = file_path.stat().st_size
+    
+    return {
+        'local_path': str(file_path),
+        's3_key': s3_key,
+        'size': file_size,
+        'category': actual_category,
+        'extension': file_extension,
+        'original_location': 'organized' if len(path_parts) > 1 and path_parts[0] in uploader_instance.extension_mappings else 'loose'
+    }
 
 
 class BackgroundUploader(QThread):
@@ -1422,42 +1649,7 @@ class BackgroundUploader(QThread):
         return organized_files
     
     def _create_file_info(self, file_path, folder_path, base_prefix):
-        """Create file info dictionary for a given file"""
-        relative_path = file_path.relative_to(folder_path)
-        path_parts = relative_path.parts
-        
-        # Determine file category
-        file_extension = file_path.suffix.lower()
-        file_category = 'OTHER'
-        
-        for category, extensions in self.extension_mappings.items():
-            if file_extension in extensions:
-                file_category = category
-                break
-        
-        # Determine S3 key based on file location
-        if len(path_parts) > 1 and path_parts[0] in self.extension_mappings:
-            # File is already in a category folder
-            category_from_path = path_parts[0]
-            rel_path_in_category = Path(*path_parts[1:])
-            s3_category_prefix = category_from_path.replace('/', '_')
-            s3_key = f"{base_prefix}/{s3_category_prefix}/{rel_path_in_category}"
-            actual_category = category_from_path
-        else:
-            # File is loose or in a non-category folder
-            s3_key = f"{base_prefix}/{file_category}/{relative_path}"
-            actual_category = file_category
-        
-        file_size = file_path.stat().st_size
-        
-        return {
-            'local_path': str(file_path),
-            's3_key': s3_key,
-            'size': file_size,
-            'category': actual_category,
-            'extension': file_extension,
-            'original_location': 'organized' if len(path_parts) > 1 and path_parts[0] in self.extension_mappings else 'loose'
-        }
+        return create_file_info_cross_platform(self, file_path, folder_path, base_prefix)
 
     def _organize_loose_files(self, folder_path, extension_mappings):
         """Organize loose files in the main directory into category folders"""
@@ -1678,76 +1870,7 @@ class BackgroundUploader(QThread):
             return f"{bytes_value / (1024 * 1024 * 1024):.1f} GB"
 
     def get_local_path_structure(self):
-        """
-        Extract the local path structure to replicate it on S3
-        Starting from the year folder
-        
-        Returns:
-            str: The relative path structure to use as S3 prefix
-        """
-        try:
-            # Get the local folder path
-            folder_path = Path(self.folder_path)
-            
-            # Look for common patterns in the path structure
-            path_parts = folder_path.parts
-            
-            # Find the year folder (4-digit number starting with 20xx)
-            year_folder_index = -1
-            for i, part in enumerate(path_parts):
-                # Check if this part looks like a year (4 digits starting with 20)
-                if part.isdigit() and len(part) == 4 and part.startswith('20'):
-                    year_folder_index = i
-                    break
-            
-            if year_folder_index >= 0:
-                # Extract the path from the year folder onwards
-                relative_structure = Path(*path_parts[year_folder_index:])
-                self.log.emit(f"📁 Using year-based structure: {relative_structure}")
-                return str(relative_structure)
-            else:
-                # Fallback: look for the base folder pattern and then find year
-                base_folder_index = -1
-                for i, part in enumerate(path_parts):
-                    if 'booking' in part.lower() or 'folders' in part.lower() or 'orders' in part.lower():
-                        base_folder_index = i
-                        break
-                
-                if base_folder_index >= 0:
-                    # Look for year folder after base folder
-                    for i in range(base_folder_index + 1, len(path_parts)):
-                        part = path_parts[i]
-                        if part.isdigit() and len(part) == 4 and part.startswith('20'):
-                            relative_structure = Path(*path_parts[i:])
-                            self.log.emit(f"📁 Found year folder, using: {relative_structure}")
-                            return str(relative_structure)
-                
-                # If no year found in expected location, try pattern matching
-                folder_name = folder_path.name
-                parent_folder = folder_path.parent.name
-                grandparent_folder = folder_path.parent.parent.name
-                
-                # Check if grandparent looks like a year
-                if grandparent_folder.isdigit() and len(grandparent_folder) == 4 and grandparent_folder.startswith('20'):
-                    relative_structure = Path(grandparent_folder) / parent_folder / folder_name
-                    self.log.emit(f"📁 Detected year structure: {relative_structure}")
-                    return str(relative_structure)
-                
-                # Check if parent looks like a year
-                elif parent_folder.isdigit() and len(parent_folder) == 4 and parent_folder.startswith('20'):
-                    relative_structure = Path(parent_folder) / folder_name
-                    self.log.emit(f"📁 Detected year structure: {relative_structure}")
-                    return str(relative_structure)
-                
-                else:
-                    # Ultimate fallback: use just the order folder
-                    self.log.emit(f"📁 No year found, using order folder only: {folder_name}")
-                    return folder_name
-                    
-        except Exception as e:
-            self.log.emit(f"⚠️ Error extracting local path structure: {str(e)}")
-            # Ultimate fallback
-            return f"Order_{self.order_number}"
+        return get_local_path_structure_cross_platform(self)
 
     def get_uploaded_files(self, order_number):
         """
