@@ -1523,24 +1523,138 @@ class S3UploaderGUI(QMainWindow):
             # Find the task
             task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
             if not task:
+                self.log_message(f"Error: Could not find task with ID {task_id}")
                 return
             
-            # Update task status
+            # Update task status to completed
             task['status'] = 'completed'
             task['progress'] = 100
+            
+            # Update completed timestamp in the task object
+            from datetime import datetime
+            task['completed_at'] = datetime.now()
+            
+            # Save the completed status to database
+            self.update_task_completion_status(task)
             
             # Update UI
             self.update_task_list(task)
             self.update_buttons_state()
             
+            # Log completion
+            self.log_message(f"✅ Task {task_id} (Order {task['order_number']}) completed successfully!")
+            self.log_activity("task", "completed", 
+                             f"Upload task completed for order {task['order_number']}", 
+                             self.user_info.get('Emp_FullName'))
+            
+            # Show tray notification for completion
+            if hasattr(self, 'tray_icon') and self.tray_icon:
+                self.tray_icon.showMessage(
+                    "🎉 Upload Complete!",
+                    f"Order {task['order_number']} uploaded successfully",
+                    self.tray_icon.MessageIcon.Information,
+                    5000
+                )
+            
             # Clean up completed tasks periodically
             self.cleanup_completed_tasks()
             
-            # Process next task
+            # Process next task in queue
             self.task_execution_finished(task)
+            
+            # Check if all tasks are completed
+            remaining_tasks = [t for t in self.upload_tasks if t['status'] not in ['completed', 'cancelled']]
+            if not remaining_tasks:
+                self.all_tasks_finished()
             
         except Exception as e:
             self.log_message(f"Error in task_finished: {str(e)}")
+            import traceback
+            self.log_message(traceback.format_exc())
+
+    def update_task_completion_status(self, task):
+        """
+        Update task completion status in the database
+        
+        Args:
+            task (dict): Task object to update
+        """
+        try:
+            if not self.db_manager.connection or not self.db_manager.connection.is_connected():
+                self.db_manager.connect()
+            
+            if not self.db_manager.connection:
+                self.log_message("Warning: No database connection available to update completion status")
+                return
+            
+            cursor = self.db_manager.connection.cursor()
+            
+            # Check which ID column exists in the table
+            cursor.execute("""
+            SELECT COLUMN_NAME 
+            FROM information_schema.COLUMNS 
+            WHERE TABLE_SCHEMA = %s 
+            AND TABLE_NAME = 'upload_tasks' 
+            AND COLUMN_NAME IN ('task_id', 'id')
+            """, (self.db_manager.rds_config['database'],))
+            
+            columns = cursor.fetchall()
+            if not columns:
+                self.log_message("Error: Could not find ID column in upload_tasks table")
+                return
+                
+            # Use the first ID column found (prioritize task_id if available)
+            id_columns = [col[0] for col in columns]
+            id_column = 'task_id' if 'task_id' in id_columns else id_columns[0]
+            
+            # Check if completed_timestamp column exists
+            cursor.execute("""
+            SELECT COUNT(*) as column_exists
+            FROM information_schema.columns
+            WHERE table_schema = %s
+            AND table_name = 'upload_tasks'
+            AND column_name = 'completed_timestamp'
+            """, (self.db_manager.rds_config['database'],))
+            
+            has_completed_timestamp = cursor.fetchone()[0] > 0
+            
+            # Build the update query based on available columns
+            if has_completed_timestamp:
+                query = f"""
+                UPDATE upload_tasks 
+                SET status = 'completed', 
+                    progress = 100, 
+                    completed_timestamp = NOW(),
+                    updated_at = NOW()
+                WHERE {id_column} = %s
+                """
+            else:
+                # If completed_timestamp doesn't exist, just update status and progress
+                query = f"""
+                UPDATE upload_tasks 
+                SET status = 'completed', 
+                    progress = 100, 
+                    updated_at = NOW()
+                WHERE {id_column} = %s
+                """
+            
+            # Execute the update
+            cursor.execute(query, (task.get('db_id'),))
+            self.db_manager.connection.commit()
+            
+            self.log_message(f"✅ Updated database: Task {task['order_number']} marked as completed")
+            
+        except Exception as e:
+            self.log_message(f"Error updating task completion status in database: {str(e)}")
+            import traceback
+            self.log_message(traceback.format_exc())
+            
+            # Try to rollback the transaction if there was an error
+            try:
+                if self.db_manager.connection:
+                    self.db_manager.connection.rollback()
+            except:
+                pass
     
     def cleanup_completed_tasks(self):
         """Clean up old completed tasks to free memory"""
@@ -2900,7 +3014,7 @@ class S3UploaderGUI(QMainWindow):
                 # Table doesn't exist, create it
                 self.log_message("Creating upload_tasks table...")
                 
-                # Create the table with appropriate structure
+                # Create the table with appropriate structure including completed_timestamp
                 create_table_query = """
                 CREATE TABLE upload_tasks (
                     task_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -2914,21 +3028,48 @@ class S3UploaderGUI(QMainWindow):
                     progress INT DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    completed_timestamp TIMESTAMP NULL,
                     s3_destination VARCHAR(1024),
                     total_files INT DEFAULT 0,
                     uploaded_files INT DEFAULT 0,
                     failed_files INT DEFAULT 0,
                     local_path VARCHAR(1024),
                     completed_at TIMESTAMP NULL,
+                    DeviceID INT,
                     INDEX idx_order_number (order_number),
                     INDEX idx_status (status),
                     INDEX idx_created_at (created_at),
-                    INDEX idx_order_date (order_date)
+                    INDEX idx_order_date (order_date),
+                    INDEX idx_completed_timestamp (completed_timestamp),
+                    INDEX idx_device_id (DeviceID)
                 )
                 """
                 cursor.execute(create_table_query)
                 self.db_manager.connection.commit()
-                self.log_message("Created upload_tasks table")
+                self.log_message("Created upload_tasks table with completed_timestamp column")
+            else:
+                # Table exists, check if completed_timestamp column exists
+                cursor.execute("""
+                SELECT COUNT(*) as column_exists
+                FROM information_schema.columns
+                WHERE table_schema = %s
+                AND table_name = 'upload_tasks'
+                AND column_name = 'completed_timestamp'
+                """, (self.db_manager.rds_config['database'],))
+                
+                has_completed_timestamp = cursor.fetchone()[0] > 0
+                
+                if not has_completed_timestamp:
+                    # Add the completed_timestamp column
+                    self.log_message("Adding completed_timestamp column to upload_tasks table")
+                    alter_query = """
+                    ALTER TABLE upload_tasks
+                    ADD COLUMN completed_timestamp TIMESTAMP NULL,
+                    ADD INDEX idx_completed_timestamp (completed_timestamp)
+                    """
+                    cursor.execute(alter_query)
+                    self.db_manager.connection.commit()
+                    self.log_message("Added completed_timestamp column to upload_tasks table")
             
             # Check if task_state_path column exists
             cursor.execute("""
@@ -2975,6 +3116,28 @@ class S3UploaderGUI(QMainWindow):
                 ADD COLUMN last_action_by_emp_id INT NULL,
                 ADD INDEX idx_created_by (created_by),
                 ADD INDEX idx_last_action_by (last_action_by)
+                """
+                cursor.execute(alter_query)
+                self.db_manager.connection.commit()
+            
+            # Check if DeviceID column exists
+            cursor.execute("""
+            SELECT COUNT(*) as column_exists
+            FROM information_schema.columns
+            WHERE table_schema = %s
+            AND table_name = 'upload_tasks'
+            AND column_name = 'DeviceID'
+            """, (self.db_manager.rds_config['database'],))
+            
+            has_device_id = cursor.fetchone()[0] > 0
+            
+            if not has_device_id:
+                # Add DeviceID column
+                self.log_message("Adding DeviceID column to upload_tasks table")
+                alter_query = """
+                ALTER TABLE upload_tasks
+                ADD COLUMN DeviceID INT NULL,
+                ADD INDEX idx_device_id (DeviceID)
                 """
                 cursor.execute(alter_query)
                 self.db_manager.connection.commit()
@@ -3043,6 +3206,7 @@ class S3UploaderGUI(QMainWindow):
                 self.log_message("Created activity_log table")
             
             self.log_message("Database schema check completed")
+            
         except Exception as e:
             self.log_message(f"Error initializing database schema: {str(e)}")
             import traceback
