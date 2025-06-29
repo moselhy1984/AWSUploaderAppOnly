@@ -2315,10 +2315,10 @@ class S3UploaderGUI(QMainWindow):
                 FROM upload_tasks t
                 LEFT JOIN devices d ON t.DeviceID = d.DeviceID
                 WHERE t.DeviceID = %s 
-                AND (
-                    t.status IN ('pending', 'running', 'paused') 
+                AND ( 
+                    t.status != 'completed'  -- كل شيء ما عدا المكتمل
                     OR 
-                    (t.status = 'completed' AND DATE(t.completed_timestamp) = %s)
+                    (t.status = 'completed' AND t.created_timestamp >= DATE_SUB(NOW(), INTERVAL 24 HOUR))  -- أو المكتمل خلال 24 ساعة
                 )
                 ORDER BY 
                     CASE 
@@ -2331,8 +2331,8 @@ class S3UploaderGUI(QMainWindow):
                     t.created_at DESC
                 """
                 
-                # Execute query with device ID and today's date
-                cursor.execute(query, (self.device_id, today))
+                # Execute query with device ID only
+                cursor.execute(query, (self.device_id,))
                 results = cursor.fetchall()
                 
                 if not results:
