@@ -1,0 +1,39 @@
+# AWS Uploader Requirements for Windows
+# ========================================
+
+# Core GUI Framework
+PyQt5==5.15.9
+PyQt5-Qt5==5.15.2
+PyQt5-sip==12.11.0
+
+# AWS SDK
+boto3==1.34.144
+botocore==1.34.144
+
+# Database Connectivity
+mysql-connector-python==8.4.0
+
+# System Information
+psutil==5.9.8
+getmac==0.9.4
+
+# Clipboard Operations
+pyperclip==1.8.2
+
+# Cryptography for secure config
+cryptography==42.0.8
+
+# Network requests
+requests==2.32.3
+
+# Additional Windows-specific packages
+pywin32==306; sys_platform == "win32"
+wmi==1.5.1; sys_platform == "win32"
+
+# Optional: For better Windows experience
+colorama==0.4.6; sys_platform == "win32"
+
+# Development/Debugging (optional)
+# Uncomment if needed for development
+# pytest==8.2.2
+# black==24.4.2 

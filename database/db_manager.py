@@ -3,34 +3,99 @@
 
 import mysql.connector
 from datetime import date
+import platform
+import ssl
 
 class DatabaseManager:
     """
-    Manages database connections and operations
+    Manages database connections and operations with Windows compatibility
     """
     def __init__(self):
+        # Base configuration
         self.rds_config = {
             'host': 'regandb.cvqgwe0s45fi.me-south-1.rds.amazonaws.com',
             'user': 'admin',
             'password': 'Regan4532148',
             'database': 'regandb',
-            'port': 3306
+            'port': 3306,
+            'charset': 'utf8mb4',
+            'collation': 'utf8mb4_unicode_ci',
+            'autocommit': False,
+            'use_unicode': True,
         }
+        
+        # Windows-specific database configuration
+        if platform.system() == 'Windows':
+            self.rds_config.update({
+                'ssl_disabled': True,  # Disable SSL on Windows to avoid certificate issues
+                'auth_plugin': 'mysql_native_password',
+                'connection_timeout': 30,
+                'allow_local_infile': False,
+                'use_pure': True,  # Use pure Python implementation on Windows
+            })
+        else:
+            # macOS/Linux configuration
+            self.rds_config.update({
+                'ssl_ca': None,
+                'ssl_verify_cert': False,
+                'ssl_verify_identity': False,
+                'connection_timeout': 10,
+                'use_pure': False,  # Use C extension on Unix systems
+            })
+        
         self.connection = None
-        self.selected_date = None  # Default to today's date
+        self.selected_date = None
+        self.system = platform.system()
+        print(f"🖥️ Database manager initialized for {self.system}")
     
     def connect(self):
         """
-        Connect to the database
+        Connect to the database with Windows-specific error handling
         
         Returns:
             bool: True if connection successful, False otherwise
         """
         try:
-            self.connection = mysql.connector.connect(**self.rds_config)
-            return True
+            print(f"🔌 Attempting database connection on {self.system}...")
+            
+            # Windows-specific connection handling
+            if self.system == 'Windows':
+                try:
+                    # First attempt: try with SSL disabled
+                    self.connection = mysql.connector.connect(**self.rds_config)
+                    print("✅ Connected to database with SSL disabled")
+                    return True
+                except mysql.connector.Error as e:
+                    print(f"⚠️ SSL disabled connection failed: {e}")
+                    
+                    # Second attempt: try with minimal SSL
+                    config_with_ssl = self.rds_config.copy()
+                    config_with_ssl.update({
+                        'ssl_disabled': False,
+                        'ssl_verify_cert': False,
+                        'ssl_verify_identity': False,
+                    })
+                    try:
+                        self.connection = mysql.connector.connect(**config_with_ssl)
+                        print("✅ Connected to database with minimal SSL")
+                        return True
+                    except mysql.connector.Error as e2:
+                        print(f"❌ All Windows connection attempts failed: {e2}")
+                        return False
+            else:
+                # Unix-like systems
+                self.connection = mysql.connector.connect(**self.rds_config)
+                print("✅ Connected to database")
+                return True
+                
         except mysql.connector.Error as e:
-            print(f"Error connecting to database: {e}")
+            print(f"❌ Database connection error on {self.system}: {e}")
+            if 'SSL' in str(e):
+                print("🔧 Hint: SSL connection issue detected. This is common on Windows.")
+                print("🔧 The application will attempt to use SSL-disabled connection.")
+            return False
+        except Exception as e:
+            print(f"❌ Unexpected error connecting to database: {e}")
             return False
     
     def close(self):

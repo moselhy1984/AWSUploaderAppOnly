@@ -1769,7 +1769,7 @@ class S3UploaderGUI(QMainWindow):
                     self.db_manager.connection.rollback()
                     self.log_message("🔄 Database transaction rolled back")
             except Exception as rollback_error:
-                                 self.log_message(f"❌ Error during rollback: {str(rollback_error)}")
+                self.log_message(f"❌ Error during rollback: {str(rollback_error)}")
                 pass
 
     def diagnose_database_connection(self):
