@@ -1518,13 +1518,22 @@ class S3UploaderGUI(QMainWindow):
         self.log_message(f"Task {task_id}: {message}")
     
     def task_finished(self, task_id):
-        """Called when a task finishes execution"""
+        """Called when a task finishes execution - Enhanced with Windows debugging"""
+        import platform
+        
+        # Critical logging to debug Windows issues
+        self.log_message(f"🎯 TASK_FINISHED CALLED: Task ID {task_id}")
+        self.log_message(f"🖥️ System: {platform.system()} | Platform: {platform.platform()}")
+        
         try:
             # Find the task
             task = next((t for t in self.upload_tasks if t['id'] == task_id), None)
             if not task:
-                self.log_message(f"Error: Could not find task with ID {task_id}")
+                self.log_message(f"❌ Error: Could not find task with ID {task_id}")
+                self.log_message(f"📋 Available tasks: {[t['id'] for t in self.upload_tasks]}")
                 return
+            
+            self.log_message(f"📋 Found task: {task['order_number']} | Current Status: {task.get('status')}")
             
             # Update task status to completed
             task['status'] = 'completed'
@@ -1534,27 +1543,36 @@ class S3UploaderGUI(QMainWindow):
             from datetime import datetime
             task['completed_at'] = datetime.now()
             
-            # Save the completed status to database
+            self.log_message(f"✅ Task status updated to completed locally")
+            self.log_message(f"⏰ Completion timestamp: {task['completed_at']}")
+            
+            # Save the completed status to database - THIS IS THE CRITICAL PART
+            self.log_message(f"💾 About to save completion status to database...")
             self.update_task_completion_status(task)
+            self.log_message(f"💾 Database update function completed")
             
             # Update UI
             self.update_task_list(task)
             self.update_buttons_state()
             
             # Log completion
-            self.log_message(f"✅ Task {task_id} (Order {task['order_number']}) completed successfully!")
+            self.log_message(f"🎉 Task {task_id} (Order {task['order_number']}) completed successfully!")
             self.log_activity("task", "completed", 
                              f"Upload task completed for order {task['order_number']}", 
                              self.user_info.get('Emp_FullName'))
             
             # Show tray notification for completion
             if hasattr(self, 'tray_icon') and self.tray_icon:
-                self.tray_icon.showMessage(
-                    "🎉 Upload Complete!",
-                    f"Order {task['order_number']} uploaded successfully",
-                    self.tray_icon.MessageIcon.Information,
-                    5000
-                )
+                try:
+                    self.tray_icon.showMessage(
+                        "🎉 Upload Complete!",
+                        f"Order {task['order_number']} uploaded successfully",
+                        self.tray_icon.MessageIcon.Information,
+                        5000
+                    )
+                    self.log_message("🔔 Tray notification sent")
+                except Exception as tray_error:
+                    self.log_message(f"⚠️ Tray notification failed: {str(tray_error)}")
             
             # Clean up completed tasks periodically
             self.cleanup_completed_tasks()
@@ -1565,96 +1583,273 @@ class S3UploaderGUI(QMainWindow):
             # Check if all tasks are completed
             remaining_tasks = [t for t in self.upload_tasks if t['status'] not in ['completed', 'cancelled']]
             if not remaining_tasks:
+                self.log_message("🏁 All tasks completed!")
                 self.all_tasks_finished()
+            else:
+                self.log_message(f"📊 Remaining tasks: {len(remaining_tasks)}")
             
         except Exception as e:
-            self.log_message(f"Error in task_finished: {str(e)}")
+            self.log_message(f"❌ CRITICAL ERROR in task_finished: {str(e)}")
+            self.log_message(f"📋 System info: {platform.system()} {platform.release()}")
             import traceback
-            self.log_message(traceback.format_exc())
+            self.log_message(f"📋 Full traceback: {traceback.format_exc()}")
+            
+            # Even if there's an error, try to log the issue
+            try:
+                self.log_activity("task", "error", 
+                                 f"Error completing task {task_id}: {str(e)}", 
+                                 self.user_info.get('Emp_FullName'))
+            except:
+                pass
 
     def update_task_completion_status(self, task):
         """
-        Update task completion status in the database
+        Update task completion status in the database with enhanced Windows compatibility
         
         Args:
             task (dict): Task object to update
         """
         try:
-            if not self.db_manager.connection or not self.db_manager.connection.is_connected():
-                self.db_manager.connect()
+            # Enhanced logging for debugging Windows issues
+            self.log_message(f"🔄 Starting database update for task {task.get('order_number', 'Unknown')}")
+            self.log_message(f"📊 Task data: ID={task.get('id')}, DB_ID={task.get('db_id')}, Status={task.get('status')}")
             
-            if not self.db_manager.connection:
-                self.log_message("Warning: No database connection available to update completion status")
+            # Check if task has database ID
+            if not task.get('db_id'):
+                self.log_message(f"⚠️ Warning: Task {task['order_number']} has no database ID, cannot update completion status")
                 return
             
+            # Ensure database connection with retry logic
+            connection_attempts = 0
+            max_attempts = 3
+            
+            while connection_attempts < max_attempts:
+                try:
+                    if not self.db_manager.connection or not self.db_manager.connection.is_connected():
+                        self.log_message(f"🔌 Attempting database connection (attempt {connection_attempts + 1}/{max_attempts})")
+                        self.db_manager.connect()
+                    
+                    if self.db_manager.connection and self.db_manager.connection.is_connected():
+                        break
+                    else:
+                        connection_attempts += 1
+                        if connection_attempts < max_attempts:
+                            import time
+                            time.sleep(1)  # Wait 1 second before retry
+                        continue
+                        
+                except Exception as conn_error:
+                    connection_attempts += 1
+                    self.log_message(f"❌ Database connection attempt {connection_attempts} failed: {str(conn_error)}")
+                    if connection_attempts < max_attempts:
+                        import time
+                        time.sleep(2)  # Wait 2 seconds before retry
+                    continue
+            
+            if not self.db_manager.connection or not self.db_manager.connection.is_connected():
+                self.log_message("❌ CRITICAL: No database connection available after all retry attempts")
+                self.log_message("🔧 This may explain why task completion is not being saved on this system")
+                return
+            
+            self.log_message("✅ Database connection established successfully")
             cursor = self.db_manager.connection.cursor()
             
-            # Check which ID column exists in the table
-            cursor.execute("""
-            SELECT COLUMN_NAME 
-            FROM information_schema.COLUMNS 
-            WHERE TABLE_SCHEMA = %s 
-            AND TABLE_NAME = 'upload_tasks' 
-            AND COLUMN_NAME IN ('task_id', 'id')
-            """, (self.db_manager.rds_config['database'],))
-            
-            columns = cursor.fetchall()
-            if not columns:
-                self.log_message("Error: Could not find ID column in upload_tasks table")
-                return
+            # Check which ID column exists in the table with enhanced error handling
+            try:
+                cursor.execute("""
+                SELECT COLUMN_NAME 
+                FROM information_schema.COLUMNS 
+                WHERE TABLE_SCHEMA = %s 
+                AND TABLE_NAME = 'upload_tasks' 
+                AND COLUMN_NAME IN ('task_id', 'id')
+                """, (self.db_manager.rds_config['database'],))
                 
-            # Use the first ID column found (prioritize task_id if available)
-            id_columns = [col[0] for col in columns]
-            id_column = 'task_id' if 'task_id' in id_columns else id_columns[0]
+                columns = cursor.fetchall()
+                self.log_message(f"📋 Found ID columns: {[col[0] for col in columns]}")
+                
+                if not columns:
+                    self.log_message("❌ Error: Could not find ID column in upload_tasks table")
+                    return
+                    
+                # Use the first ID column found (prioritize task_id if available)
+                id_columns = [col[0] for col in columns]
+                id_column = 'task_id' if 'task_id' in id_columns else id_columns[0]
+                self.log_message(f"🎯 Using ID column: {id_column}")
+                
+            except Exception as col_error:
+                self.log_message(f"❌ Error checking ID columns: {str(col_error)}")
+                # Default to task_id if check fails
+                id_column = 'task_id'
+                self.log_message(f"🔄 Defaulting to ID column: {id_column}")
             
             # Check if completed_timestamp column exists
-            cursor.execute("""
-            SELECT COUNT(*) as column_exists
-            FROM information_schema.columns
-            WHERE table_schema = %s
-            AND table_name = 'upload_tasks'
-            AND column_name = 'completed_timestamp'
-            """, (self.db_manager.rds_config['database'],))
+            try:
+                cursor.execute("""
+                SELECT COUNT(*) as column_exists
+                FROM information_schema.columns
+                WHERE table_schema = %s
+                AND table_name = 'upload_tasks'
+                AND column_name = 'completed_timestamp'
+                """, (self.db_manager.rds_config['database'],))
+                
+                has_completed_timestamp = cursor.fetchone()[0] > 0
+                self.log_message(f"📅 Completed timestamp column exists: {has_completed_timestamp}")
+                
+            except Exception as ts_error:
+                self.log_message(f"❌ Error checking timestamp column: {str(ts_error)}")
+                has_completed_timestamp = False
             
-            has_completed_timestamp = cursor.fetchone()[0] > 0
-            
-            # Build the update query based on available columns
-            if has_completed_timestamp:
-                query = f"""
-                UPDATE upload_tasks 
-                SET status = 'completed', 
-                    progress = 100, 
-                    completed_timestamp = NOW(),
-                    updated_at = NOW()
-                WHERE {id_column} = %s
-                """
-            else:
-                # If completed_timestamp doesn't exist, just update status and progress
-                query = f"""
-                UPDATE upload_tasks 
-                SET status = 'completed', 
-                    progress = 100, 
-                    updated_at = NOW()
-                WHERE {id_column} = %s
-                """
-            
-            # Execute the update
-            cursor.execute(query, (task.get('db_id'),))
-            self.db_manager.connection.commit()
-            
-            self.log_message(f"✅ Updated database: Task {task['order_number']} marked as completed")
+            # Build and execute the update query
+            try:
+                if has_completed_timestamp:
+                    query = f"""
+                    UPDATE upload_tasks 
+                    SET status = 'completed', 
+                        progress = 100, 
+                        completed_timestamp = NOW(),
+                        updated_at = NOW()
+                    WHERE {id_column} = %s
+                    """
+                else:
+                    query = f"""
+                    UPDATE upload_tasks 
+                    SET status = 'completed', 
+                        progress = 100, 
+                        updated_at = NOW()
+                    WHERE {id_column} = %s
+                    """
+                
+                self.log_message(f"📝 Executing update query for task DB_ID: {task.get('db_id')}")
+                self.log_message(f"🔍 Query: {query.replace('%s', str(task.get('db_id')))}")
+                
+                # Execute the update
+                cursor.execute(query, (task.get('db_id'),))
+                affected_rows = cursor.rowcount
+                
+                self.log_message(f"📊 Query executed, affected rows: {affected_rows}")
+                
+                if affected_rows == 0:
+                    self.log_message(f"⚠️ Warning: No rows were updated. Task DB_ID {task.get('db_id')} may not exist in database")
+                    # Try to find the task in database for debugging
+                    try:
+                        check_query = f"SELECT {id_column}, order_number, status FROM upload_tasks WHERE {id_column} = %s"
+                        cursor.execute(check_query, (task.get('db_id'),))
+                        result = cursor.fetchone()
+                        if result:
+                            self.log_message(f"🔍 Task found in database: ID={result[0]}, Order={result[1]}, Status={result[2]}")
+                        else:
+                            self.log_message(f"❌ Task with DB_ID {task.get('db_id')} not found in database")
+                    except Exception as check_error:
+                        self.log_message(f"❌ Error checking task existence: {str(check_error)}")
+                
+                # Commit the transaction
+                self.db_manager.connection.commit()
+                self.log_message("✅ Database transaction committed successfully")
+                
+                if affected_rows > 0:
+                    self.log_message(f"🎉 SUCCESS: Task {task['order_number']} marked as completed in database")
+                else:
+                    self.log_message(f"⚠️ Task {task['order_number']} update executed but no rows affected")
+                
+            except Exception as query_error:
+                self.log_message(f"❌ Error executing update query: {str(query_error)}")
+                import traceback
+                self.log_message(f"📋 Query error traceback: {traceback.format_exc()}")
+                raise
             
         except Exception as e:
-            self.log_message(f"Error updating task completion status in database: {str(e)}")
+            self.log_message(f"❌ CRITICAL ERROR in update_task_completion_status: {str(e)}")
+            self.log_message(f"📋 Task data: {task}")
             import traceback
-            self.log_message(traceback.format_exc())
+            self.log_message(f"📋 Full traceback: {traceback.format_exc()}")
             
             # Try to rollback the transaction if there was an error
             try:
                 if self.db_manager.connection:
                     self.db_manager.connection.rollback()
-            except:
+                    self.log_message("🔄 Database transaction rolled back")
+            except Exception as rollback_error:
+                                 self.log_message(f"❌ Error during rollback: {str(rollback_error)}")
                 pass
+
+    def diagnose_database_connection(self):
+        """
+        Diagnose database connection issues - especially helpful for Windows debugging
+        """
+        import platform
+        
+        self.log_message("🔍 === DATABASE CONNECTION DIAGNOSIS ===")
+        self.log_message(f"🖥️ Operating System: {platform.system()} {platform.release()}")
+        self.log_message(f"🐍 Python Version: {platform.python_version()}")
+        
+        try:
+            # Check if db_manager exists
+            if not hasattr(self, 'db_manager') or not self.db_manager:
+                self.log_message("❌ ERROR: Database manager not initialized")
+                return False
+            
+            self.log_message("✅ Database manager exists")
+            
+            # Check connection status
+            if not self.db_manager.connection:
+                self.log_message("❌ ERROR: No database connection object")
+                try:
+                    self.log_message("🔄 Attempting to create connection...")
+                    self.db_manager.connect()
+                    if self.db_manager.connection:
+                        self.log_message("✅ Database connection created")
+                    else:
+                        self.log_message("❌ ERROR: Failed to create database connection")
+                        return False
+                except Exception as conn_error:
+                    self.log_message(f"❌ ERROR creating connection: {str(conn_error)}")
+                    return False
+            else:
+                self.log_message("✅ Database connection object exists")
+            
+            # Test connection
+            try:
+                if self.db_manager.connection.is_connected():
+                    self.log_message("✅ Database connection is active")
+                else:
+                    self.log_message("❌ Database connection is not active")
+                    return False
+            except Exception as test_error:
+                self.log_message(f"❌ ERROR testing connection: {str(test_error)}")
+                return False
+            
+            # Test query execution
+            try:
+                cursor = self.db_manager.connection.cursor()
+                cursor.execute("SELECT 1")
+                result = cursor.fetchone()
+                if result and result[0] == 1:
+                    self.log_message("✅ Database query test successful")
+                else:
+                    self.log_message("❌ Database query test failed")
+                    return False
+            except Exception as query_error:
+                self.log_message(f"❌ ERROR executing test query: {str(query_error)}")
+                return False
+            
+            # Check upload_tasks table
+            try:
+                cursor = self.db_manager.connection.cursor()
+                cursor.execute("SELECT COUNT(*) FROM upload_tasks")
+                count = cursor.fetchone()[0]
+                self.log_message(f"✅ upload_tasks table accessible, {count} records found")
+            except Exception as table_error:
+                self.log_message(f"❌ ERROR accessing upload_tasks table: {str(table_error)}")
+                return False
+            
+            self.log_message("🎉 Database diagnosis completed successfully")
+            return True
+            
+        except Exception as e:
+            self.log_message(f"❌ CRITICAL ERROR in database diagnosis: {str(e)}")
+            import traceback
+            self.log_message(f"📋 Diagnosis traceback: {traceback.format_exc()}")
+            return False
     
     def cleanup_completed_tasks(self):
         """Clean up old completed tasks to free memory"""
