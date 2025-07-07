@@ -11,7 +11,7 @@ class OrderSelectorDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle('Select Order')
         self.setFixedWidth(300)
-        self.layout = QVBoxLayout()
+        self.main_layout = QVBoxLayout()  # Renamed to avoid conflict with built-in layout
         
         instructions = QLabel("Select an order from today's orders:")
         instructions.setWordWrap(True)
@@ -27,11 +27,11 @@ class OrderSelectorDialog(QDialog):
         self.submit_btn = QPushButton('Select')
         self.submit_btn.clicked.connect(self.accept)
         
-        self.layout.addWidget(instructions)
-        self.layout.addWidget(self.order_combo)
-        self.layout.addWidget(self.submit_btn)
+        self.main_layout.addWidget(instructions)
+        self.main_layout.addWidget(self.order_combo)
+        self.main_layout.addWidget(self.submit_btn)
         
-        self.setLayout(self.layout)
+        self.setLayout(self.main_layout)
     
     def get_selected_order_id(self):
         """

@@ -18,7 +18,7 @@ class ImagePreviewDialog(QDialog):
         self.setWindowTitle(f'Image Previews - Order {order_number}')
         self.setFixedSize(800, 600)
         self.order_number = order_number
-        self.parent = parent
+        self.main_parent = parent  # Renamed to avoid conflict with built-in parent
         
         # Set application icon using resource_path
         from utils.resource_manager import get_icon_path
@@ -34,7 +34,7 @@ class ImagePreviewDialog(QDialog):
         
         # Information label
         info_label = QLabel(f"Image previews for Order {order_number}")
-        info_label.setAlignment(Qt.AlignCenter)
+        info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # type: ignore
         layout.addWidget(info_label)
         
         # Thumbnail grid
@@ -50,7 +50,7 @@ class ImagePreviewDialog(QDialog):
         
         # Close button
         close_button = QPushButton("Close")
-        close_button.clicked.connect(self.close)
+        close_button.clicked.connect(self.accept)  # type: ignore
         layout.addWidget(close_button)
         
         self.setLayout(layout)
@@ -64,8 +64,8 @@ class ImagePreviewDialog(QDialog):
         """
         try:
             # Get list of image files for this order
-            if hasattr(self.parent, 'db_manager'):
-                db_manager = self.parent.db_manager
+            if hasattr(self.main_parent, 'db_manager'):
+                db_manager = self.main_parent.db_manager  # type: ignore
                 
                 if not db_manager.connection or not db_manager.connection.is_connected():
                     db_manager.connect()
@@ -85,7 +85,7 @@ class ImagePreviewDialog(QDialog):
                 if not result or result['table_exists'] == 0:
                     # Table doesn't exist yet
                     label = QLabel("No image previews available. Upload files first.")
-                    label.setAlignment(Qt.AlignCenter)
+                    label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # type: ignore
                     self.grid_layout.addWidget(label)
                     return
                 
@@ -105,18 +105,18 @@ class ImagePreviewDialog(QDialog):
                 
                 if not images:
                     label = QLabel("No image files found for this order.")
-                    label.setAlignment(Qt.AlignCenter)
+                    label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # type: ignore
                     self.grid_layout.addWidget(label)
                     return
                 
                 # Find local storage path from parent
                 local_storage_path = ""
-                if hasattr(self.parent, 'local_storage_path'):
-                    local_storage_path = self.parent.local_storage_path
+                if hasattr(self.main_parent, 'local_storage_path'):
+                    local_storage_path = self.main_parent.local_storage_path  # type: ignore
                 
                 if not local_storage_path:
                     label = QLabel("Local storage path not configured. Cannot display previews.")
-                    label.setAlignment(Qt.AlignCenter)
+                    label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # type: ignore
                     self.grid_layout.addWidget(label)
                     return
                 
@@ -124,7 +124,7 @@ class ImagePreviewDialog(QDialog):
                 order_details = db_manager.get_order_details(self.order_number)
                 if not order_details or not order_details.get('order'):
                     label = QLabel("Could not retrieve order details.")
-                    label.setAlignment(Qt.AlignCenter)
+                    label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # type: ignore
                     self.grid_layout.addWidget(label)
                     return
                 
@@ -140,7 +140,7 @@ class ImagePreviewDialog(QDialog):
                             order_date = datetime.strptime(order_date, '%Y-%m-%d')
                         except Exception:
                             label = QLabel("Could not parse order date.")
-                            label.setAlignment(Qt.AlignCenter)
+                            label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # type: ignore
                             self.grid_layout.addWidget(label)
                             return
                 
@@ -150,7 +150,7 @@ class ImagePreviewDialog(QDialog):
                 
                 # Add a label with the count of images
                 count_label = QLabel(f"Found {len(images)} images (showing up to 20)")
-                count_label.setAlignment(Qt.AlignCenter)
+                count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # type: ignore
                 self.grid_layout.addWidget(count_label)
                 
                 # Create a grid for the thumbnails
@@ -186,16 +186,20 @@ class ImagePreviewDialog(QDialog):
                         
                         # Add the image
                         pixmap = QPixmap(str(local_file_path))
-                        pixmap = pixmap.scaled(150, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                        pixmap = pixmap.scaled(
+                            150, 150, 
+                            Qt.AspectRatioMode.KeepAspectRatio,  # type: ignore
+                            Qt.TransformationMode.SmoothTransformation  # type: ignore
+                        )
                         
                         image_label = QLabel()
                         image_label.setPixmap(pixmap)
-                        image_label.setAlignment(Qt.AlignCenter)
+                        image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # type: ignore
                         frame_layout.addWidget(image_label)
                         
                         # Add the filename (truncated if too long)
                         name_label = QLabel(file_name if len(file_name) < 20 else file_name[:17] + "...")
-                        name_label.setAlignment(Qt.AlignCenter)
+                        name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # type: ignore
                         frame_layout.addWidget(name_label)
                         
                         frame.setLayout(frame_layout)
@@ -213,12 +217,12 @@ class ImagePreviewDialog(QDialog):
                 # If no images were displayed
                 if image_grid.count() == 0:
                     label = QLabel("No local image files found. Files may have been moved or deleted.")
-                    label.setAlignment(Qt.AlignCenter)
+                    label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # type: ignore
                     self.grid_layout.addWidget(label)
             
         except Exception as e:
             error_label = QLabel(f"Error loading previews: {str(e)}")
-            error_label.setAlignment(Qt.AlignCenter)
+            error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # type: ignore
             self.grid_layout.addWidget(error_label)
             
             # Add detailed error for debugging

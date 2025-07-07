@@ -4,7 +4,7 @@
 import os
 import sys
 from pathlib import Path
-from typing import Union, Optional
+from typing import Union, Optional, List
 import logging
 
 class ResourceManager:
@@ -14,17 +14,19 @@ class ResourceManager:
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        self._base_path = None
+        self._base_path: Optional[Path] = None
         self._is_frozen = self._check_if_frozen()
         self._initialize_base_path()
         
     @property
-    def base_path(self):
+    def base_path(self) -> Path:
         """Get the base path for the application"""
+        if self._base_path is None:
+            raise RuntimeError("Base path not initialized")
         return self._base_path
         
     @property
-    def is_frozen(self):
+    def is_frozen(self) -> bool:
         """Check if the application is frozen (compiled)"""
         return self._is_frozen
     
@@ -42,7 +44,7 @@ class ResourceManager:
             # إذا كان التطبيق مجمد (executable)
             if hasattr(sys, '_MEIPASS'):
                 # PyInstaller creates a temp folder and stores path in _MEIPASS
-                self._base_path = Path(sys._MEIPASS)
+                self._base_path = Path(sys._MEIPASS)  # type: ignore
                 self.logger.info(f"Running as PyInstaller executable. Base path: {self._base_path}")
             else:
                 # Fallback for other frozen applications
@@ -67,13 +69,13 @@ class ResourceManager:
             Path: المسار الكامل للمورد
         """
         if not relative_path:
-            return self._base_path
+            return self.base_path
         
         # تحويل إلى Path object
         resource_path = Path(relative_path)
         
         # إنشاء المسار الكامل
-        full_path = self._base_path / resource_path
+        full_path = self.base_path / resource_path
         
         # فحص وجود الملف
         if full_path.exists():
@@ -92,7 +94,7 @@ class ResourceManager:
             self.logger.warning(f"Resource not found: {full_path}")
             return full_path
     
-    def _get_alternative_paths(self, resource_path: Path) -> list:
+    def _get_alternative_paths(self, resource_path: Path) -> List[Path]:
         """الحصول على مسارات بديلة للبحث عن المورد"""
         alternatives = []
         
@@ -134,26 +136,16 @@ class ResourceManager:
         full_path.mkdir(parents=True, exist_ok=True)
         return full_path
     
-    def list_resources(self, pattern: str = "*") -> list:
+    def list_resources(self, pattern: str = "*") -> List[Path]:
         """عرض قائمة بجميع الموارد المتاحة"""
         resources = []
         try:
-            for item in self._base_path.glob(pattern):
+            for item in self.base_path.glob(pattern):
                 if item.is_file():
-                    resources.append(item.relative_to(self._base_path))
+                    resources.append(item.relative_to(self.base_path))
         except Exception as e:
             self.logger.error(f"Error listing resources: {e}")
         return resources
-    
-    @property
-    def base_path(self) -> Path:
-        """المسار الأساسي للموارد"""
-        return self._base_path
-    
-    @property
-    def is_frozen(self) -> bool:
-        """هل التطبيق يعمل كـ executable؟"""
-        return self._is_frozen
 
 
 # إنشاء instance عالمي

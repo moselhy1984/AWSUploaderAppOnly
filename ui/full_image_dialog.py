@@ -43,14 +43,14 @@ class FullImageDialog(QDialog):
         title_font.setPointSize(14)
         title_font.setBold(True)
         title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # type: ignore
         header_layout.addWidget(title_label)
         
         layout.addWidget(header_frame)
         
         # Loading indicator
         self.loading_label = QLabel("🔄 Loading full image...")
-        self.loading_label.setAlignment(Qt.AlignCenter)
+        self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # type: ignore
         self.loading_label.setStyleSheet("font-size: 14pt; color: #007acc; margin: 40px;")
         layout.addWidget(self.loading_label)
         
@@ -60,7 +60,7 @@ class FullImageDialog(QDialog):
         self.scroll_area.setVisible(False)
         
         self.image_label = QLabel()
-        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # type: ignore
         self.image_label.setMinimumSize(400, 300)
         
         self.scroll_area.setWidget(self.image_label)
@@ -72,7 +72,7 @@ class FullImageDialog(QDialog):
         
         close_btn = QPushButton("Close")
         close_btn.setMinimumSize(100, 35)
-        close_btn.clicked.connect(self.close)
+        close_btn.clicked.connect(self.accept)  # type: ignore
         button_layout.addWidget(close_btn)
         
         layout.addLayout(button_layout)
@@ -98,8 +98,8 @@ class FullImageDialog(QDialog):
             # Scale image to fit dialog while maintaining aspect ratio
             scaled_pixmap = pixmap.scaled(
                 700, 500, 
-                Qt.KeepAspectRatio, 
-                Qt.SmoothTransformation
+                Qt.AspectRatioMode.KeepAspectRatio,  # type: ignore
+                Qt.TransformationMode.SmoothTransformation  # type: ignore
             )
             
             self.image_label.setPixmap(scaled_pixmap)

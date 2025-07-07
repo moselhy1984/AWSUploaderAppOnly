@@ -5,6 +5,7 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, Dict, Any, List, Union
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
                             QPushButton, QDateEdit, QFileDialog, QMessageBox, 
                             QGroupBox, QFormLayout, QCheckBox, QProgressBar, 
@@ -106,7 +107,7 @@ class TaskEditorDialog(QDialog):
     """
     Dialog for adding or modifying upload tasks
     """
-    def __init__(self, db_manager, local_storage_path, task_data=None, parent=None):
+    def __init__(self, db_manager, local_storage_path, task_data: Optional[Dict[str, Any]] = None, parent=None):
         """
         Initialize the task editor dialog
         
@@ -121,11 +122,11 @@ class TaskEditorDialog(QDialog):
         self.db_manager = db_manager
         self.local_storage_path = local_storage_path
         self.task_data = task_data
-        self.parent = parent
+        self.main_parent = parent  # Renamed to avoid conflict with built-in parent
         self.is_edit_mode = task_data is not None
         
         # Initialize photographers data
-        if self.is_edit_mode:
+        if self.is_edit_mode and self.task_data:
             self.photographers = self.task_data['photographers'].copy()
         else:
             self.photographers = {
@@ -135,7 +136,7 @@ class TaskEditorDialog(QDialog):
             }
         
         self.current_order_path = None
-        if self.is_edit_mode:
+        if self.is_edit_mode and self.task_data:
             # Ensure local_path exists in task_data, use folder_path if missing
             if 'local_path' not in self.task_data or not self.task_data['local_path']:
                 self.task_data['local_path'] = self.task_data['folder_path']
@@ -362,6 +363,9 @@ class TaskEditorDialog(QDialog):
             
     def load_task_data(self):
         """Load existing task data for editing"""
+        if not self.task_data:
+            return
+            
         # Set order date
         if isinstance(self.task_data['order_date'], QDate):
             self.order_date.setDate(self.task_data['order_date'])
@@ -597,7 +601,7 @@ class TaskEditorDialog(QDialog):
             return
         
         # If in edit mode and new folder path is specified, move files
-        if self.is_edit_mode and hasattr(self, 'new_folder_path') and self.new_folder_path.text():
+        if self.is_edit_mode and self.task_data and hasattr(self, 'new_folder_path') and self.new_folder_path.text():
             source_path = Path(self.task_data['folder_path'])
             target_path = Path(self.new_folder_path.text())
             
@@ -652,15 +656,15 @@ class TaskEditorDialog(QDialog):
         super().accept()
         
         # بدء الرفع التلقائي بعد إضافة المهمة (في وضع الإضافة فقط)
-        if not self.is_edit_mode and self.parent:
+        if not self.is_edit_mode and self.main_parent:
             try:
                 # الحصول على آخر مهمة مضافة والبدء بالرفع
-                if hasattr(self.parent, 'upload_tasks') and self.parent.upload_tasks:
+                if hasattr(self.main_parent, 'upload_tasks') and self.main_parent.upload_tasks:  # type: ignore
                     # العثور على المهمة الأخيرة المضافة
-                    latest_task = self.parent.upload_tasks[-1]
+                    latest_task = self.main_parent.upload_tasks[-1]  # type: ignore
                     # بدء الرفع تلقائياً
-                    if hasattr(self.parent, 'start_task'):
-                        self.parent.start_task(latest_task)
+                    if hasattr(self.main_parent, 'start_task'):
+                        self.main_parent.start_task(latest_task)  # type: ignore
             except Exception as e:
                 pass  # تجاهل الأخطاء في بدء الرفع
     
@@ -732,7 +736,7 @@ class TaskEditorDialog(QDialog):
         }
         
         # If editing, preserve task ID
-        if self.is_edit_mode:
+        if self.is_edit_mode and self.task_data:
             task_data['id'] = self.task_data['id']
         
         return task_data

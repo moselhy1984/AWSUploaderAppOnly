@@ -348,7 +348,6 @@ class AwsCredentialsEncryptorGUI:
             key_path.write_text(key.decode())
             
             # Also save copies in the root directory for the application to find
-            from pathlib import Path
             root_config_path = Path('config.enc')
             root_key_path = Path('encryption_key.txt')
             

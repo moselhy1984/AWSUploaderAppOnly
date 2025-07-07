@@ -1,17 +1,18 @@
 import time
 from functools import wraps
+from typing import Optional, Callable, Any
 
 class CircuitBreaker:
     def __init__(self, failure_threshold=5, recovery_timeout=60):
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
         self.failure_count = 0
-        self.last_failure_time = None
+        self.last_failure_time: Optional[float] = None
         self.state = 'CLOSED'  # CLOSED, OPEN, HALF_OPEN
     
-    def call(self, func, *args, **kwargs):
+    def call(self, func: Callable, *args, **kwargs) -> Any:
         if self.state == 'OPEN':
-            if time.time() - self.last_failure_time > self.recovery_timeout:
+            if self.last_failure_time is not None and time.time() - self.last_failure_time > self.recovery_timeout:
                 self.state = 'HALF_OPEN'
             else:
                 raise Exception("Circuit breaker is OPEN")
@@ -35,9 +36,9 @@ def circuit_breaker_decorator(failure_threshold=5, recovery_timeout=60):
     """Decorator for applying circuit breaker pattern to functions"""
     breaker = CircuitBreaker(failure_threshold, recovery_timeout)
     
-    def decorator(func):
+    def decorator(func: Callable) -> Callable:
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args, **kwargs) -> Any:
             return breaker.call(func, *args, **kwargs)
         return wrapper
     return decorator 

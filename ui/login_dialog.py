@@ -33,7 +33,7 @@ class LoginDialog(QDialog):
         
         # Title
         title_label = QLabel("Please login to continue")
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_label.setStyleSheet("font-size: 16pt; font-weight: bold;")
         layout.addWidget(title_label)
         

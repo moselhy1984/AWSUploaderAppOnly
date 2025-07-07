@@ -4,6 +4,7 @@
 import json
 import getmac
 from pathlib import Path
+from typing import Dict, Any, Optional
 from cryptography.fernet import Fernet, InvalidToken
 
 class SecureConfigManager:
@@ -15,9 +16,15 @@ class SecureConfigManager:
         from utils.resource_manager import get_config_path
         self.config_path = get_config_path('config.enc')
         self.key_path = get_config_path('encryption_key.txt')
-        self.mac_address = getmac.get_mac_address()
+        
+        # Get MAC address with proper error handling
+        try:
+            mac = getmac.get_mac_address()
+            self.mac_address: Optional[str] = str(mac) if mac else None
+        except Exception:
+            self.mac_address = None
     
-    def read_key_from_file(self):
+    def read_key_from_file(self) -> bytes:
         """
         Read encryption key from file
         
@@ -41,7 +48,7 @@ class SecureConfigManager:
         except Exception as e:
             raise ValueError(f"Error reading encryption key: {str(e)}")
     
-    def decrypt_config(self):
+    def decrypt_config(self) -> Dict[str, Any]:
         """
         Decrypt configuration file
         
@@ -99,9 +106,18 @@ class SecureConfigManager:
             for k, v in config.items():
                 if k not in sum(mapping.values(), []):
                     normalized_config[k] = v
+            
             # Make MAC check mandatory - prevent decryption if not matching
-            if 'authorized_mac' in config and config['authorized_mac'].lower() != self.mac_address.lower():
-                raise ValueError(f"MAC address mismatch. Config: {config['authorized_mac']}, Current: {self.mac_address}. This configuration is only valid for the authorized device.")
+            if 'authorized_mac' in config:
+                if self.mac_address is None:
+                    raise ValueError("Unable to determine current MAC address for security verification")
+                
+                config_mac = str(config['authorized_mac']).lower()
+                current_mac = self.mac_address.lower()
+                
+                if config_mac != current_mac:
+                    raise ValueError(f"MAC address mismatch. Config: {config['authorized_mac']}, Current: {self.mac_address}. This configuration is only valid for the authorized device.")
+            
             return normalized_config
         except Exception as e:
             raise ValueError(f"Configuration error: {str(e)}")

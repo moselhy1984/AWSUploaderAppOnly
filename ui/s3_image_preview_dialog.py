@@ -50,12 +50,12 @@ class S3ImagePreviewDialog(QDialog):
         title_font.setPointSize(16)
         title_font.setBold(True)
         title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header_layout.addWidget(title_label)
         
         # Subtitle
         subtitle_label = QLabel("Preview of uploaded images from S3 bucket")
-        subtitle_label.setAlignment(Qt.AlignCenter)
+        subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle_label.setStyleSheet("color: #666; margin-bottom: 5px;")
         header_layout.addWidget(subtitle_label)
         
@@ -66,7 +66,7 @@ class S3ImagePreviewDialog(QDialog):
         loading_layout = QVBoxLayout(self.loading_frame)
         
         self.loading_label = QLabel("🔄 Loading images from S3...")
-        self.loading_label.setAlignment(Qt.AlignCenter)
+        self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.loading_label.setStyleSheet("font-size: 14pt; color: #007acc; margin: 20px;")
         loading_layout.addWidget(self.loading_label)
         
@@ -98,7 +98,7 @@ class S3ImagePreviewDialog(QDialog):
         status_layout = QVBoxLayout(status_frame)
         
         self.status_label = QLabel("")
-        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.status_label.setStyleSheet("padding: 10px; color: #495057;")
         status_layout.addWidget(self.status_label)
         
@@ -123,7 +123,7 @@ class S3ImagePreviewDialog(QDialog):
                 background-color: #5a6268;
             }
         """)
-        close_btn.clicked.connect(self.close)
+        close_btn.clicked.connect(self.accept)
         button_layout.addWidget(close_btn)
         
         layout.addLayout(button_layout)
@@ -220,13 +220,13 @@ class S3ImagePreviewDialog(QDialog):
         
         # Index label
         index_label = QLabel(f"#{index}")
-        index_label.setAlignment(Qt.AlignCenter)
+        index_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         index_label.setStyleSheet("color: #6c757d; font-size: 10pt; font-weight: bold;")
         layout.addWidget(index_label)
         
         # Image display area
         image_label = QLabel()
-        image_label.setAlignment(Qt.AlignCenter)
+        image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         image_label.setMinimumSize(150, 120)
         image_label.setMaximumSize(150, 120)
         image_label.setStyleSheet("border: 1px solid #e9ecef; background-color: #f8f9fa;")
@@ -246,7 +246,7 @@ class S3ImagePreviewDialog(QDialog):
             display_name = file_name
             
         name_label = QLabel(display_name)
-        name_label.setAlignment(Qt.AlignCenter)
+        name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         name_label.setWordWrap(True)
         name_label.setStyleSheet("color: #495057; font-size: 9pt; border: none;")
         name_label.setToolTip(file_name)  # Show full name on hover
@@ -259,8 +259,8 @@ class S3ImagePreviewDialog(QDialog):
         def show_full_image():
             self.show_full_image_dialog(image_key, file_name)
             
-        widget.mousePressEvent = lambda event: show_full_image()
-        widget.setCursor(Qt.PointingHandCursor)
+        widget.mousePressEvent = lambda a0: show_full_image()  # type: ignore
+        widget.setCursor(Qt.CursorShape.PointingHandCursor)  # type: ignore
         
         return widget
     
@@ -298,8 +298,8 @@ class S3ImagePreviewDialog(QDialog):
             # Scale image to fit label
             scaled_pixmap = pixmap.scaled(
                 140, 110, 
-                Qt.KeepAspectRatio, 
-                Qt.SmoothTransformation
+                Qt.AspectRatioMode.KeepAspectRatio,  # type: ignore
+                Qt.TransformationMode.SmoothTransformation  # type: ignore
             )
             label.setPixmap(scaled_pixmap)
             label.setText("")  # Clear loading text
@@ -361,16 +361,18 @@ class S3ImagePreviewDialog(QDialog):
             """
         
         error_label = QLabel()
-        error_label.setAlignment(Qt.AlignCenter)
+        error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         error_label.setText(error_html)
         error_label.setWordWrap(True)
         error_label.setStyleSheet("QLabel { background-color: #f8f9fa; border-radius: 5px; }")
         
         # Clear grid and add error message
         for i in reversed(range(self.grid_layout.count())):
-            widget = self.grid_layout.itemAt(i).widget()
-            if widget:
-                widget.setParent(None)
+            item = self.grid_layout.itemAt(i)
+            if item:
+                widget = item.widget()
+                if widget:
+                    widget.setParent(None)
             
         self.grid_layout.addWidget(error_label, 0, 0, 1, 4)  # Span all columns
         
@@ -597,7 +599,11 @@ class ThumbnailLoaderThread(QThread):
             if success and not pixmap.isNull():
                 # Scale down large images immediately to save memory
                 if pixmap.width() > 300 or pixmap.height() > 300:
-                    pixmap = pixmap.scaled(300, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    pixmap = pixmap.scaled(
+                        300, 300, 
+                        Qt.AspectRatioMode.KeepAspectRatio,  # type: ignore
+                        Qt.TransformationMode.SmoothTransformation  # type: ignore
+                    )
                 
                 self.thumbnail_loaded.emit(pixmap)
             else:
