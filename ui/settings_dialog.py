@@ -24,15 +24,13 @@ class SettingsDialog(QDialog):
         self.setModal(True)
         self.setFixedSize(500, 200)
         
-        # Set application icon
-        icon_path = os.path.join(os.path.dirname(__file__), '..', 'Uploadicon.ico')
-        if os.path.exists(icon_path):
-            self.setWindowIcon(QIcon(icon_path))
+        # Set application icon using resource_path
+        from utils.resource_manager import get_icon_path
+        icon_path = get_icon_path('Uploadicon.ico')
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
         else:
-            # Try alternative path
-            icon_path = 'Uploadicon.ico'
-            if os.path.exists(icon_path):
-                self.setWindowIcon(QIcon(icon_path))
+            print(f"Warning: Settings dialog icon not found at {icon_path}")
         
         self.init_ui()
         self.load_current_settings()

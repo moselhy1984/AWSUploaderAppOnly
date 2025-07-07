@@ -8,11 +8,13 @@ from cryptography.fernet import Fernet, InvalidToken
 
 class SecureConfigManager:
     """
-    Manages secure configuration files and decryption
+    Manages secure configuration files and decryption with resource_path support
     """
     def __init__(self):
-        self.config_path = Path('config.enc')
-        self.key_path = Path('encryption_key.txt')
+        # Use resource_path for proper file handling
+        from utils.resource_manager import get_config_path
+        self.config_path = get_config_path('config.enc')
+        self.key_path = get_config_path('encryption_key.txt')
         self.mac_address = getmac.get_mac_address()
     
     def read_key_from_file(self):

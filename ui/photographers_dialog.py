@@ -16,17 +16,14 @@ class PhotographersDialog(QDialog):
         self.setWindowTitle("Select Photographers")
         self.setFixedSize(400, 300)
         
-        # Set application icon
-        icon_path = os.path.join(os.path.dirname(__file__), '..', 'Uploadicon.ico')
-        if os.path.exists(icon_path):
-            from PyQt5.QtGui import QIcon
-            self.setWindowIcon(QIcon(icon_path))
+        # Set application icon using resource_path
+        from utils.resource_manager import get_icon_path
+        from PyQt5.QtGui import QIcon
+        icon_path = get_icon_path('Uploadicon.ico')
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
         else:
-            # Try alternative path
-            icon_path = 'Uploadicon.ico'
-            if os.path.exists(icon_path):
-                from PyQt5.QtGui import QIcon
-                self.setWindowIcon(QIcon(icon_path))
+            print(f"Warning: Photographers dialog icon not found at {icon_path}")
         
         layout = QVBoxLayout()
         

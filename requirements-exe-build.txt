@@ -1,0 +1,67 @@
+# AWS Uploader - EXE Build Requirements
+# =======================================
+# Tested and compatible versions for Windows EXE building
+# Last updated: January 2025
+
+# Core PyInstaller and build tools
+pyinstaller==6.3.0
+pyinstaller-hooks-contrib==2024.9
+wheel==0.42.0
+setuptools==69.0.3
+
+# Core Application Dependencies
+PyQt5==5.15.9
+PyQt5-Qt5==5.15.2
+PyQt5-sip==12.11.0
+
+# AWS SDK - Stable versions
+boto3==1.34.144
+botocore==1.34.144
+s3transfer==0.10.2
+jmespath==1.0.1
+
+# Database Connectivity - Windows compatible
+mysql-connector-python==8.4.0
+PyMySQL==1.1.0
+
+# System Information & Hardware
+psutil==5.9.8
+getmac==0.9.4
+wmi==1.5.1; sys_platform == "win32"
+
+# Windows-specific packages
+pywin32==306; sys_platform == "win32"
+pywin32-ctypes==0.2.2; sys_platform == "win32"
+comtypes==1.4.6; sys_platform == "win32"
+
+# Cryptography and Security
+cryptography==42.0.8
+certifi==2024.7.4
+
+# Network and HTTP
+requests==2.32.3
+urllib3==2.2.2
+idna==3.7
+
+# File Operations and Path Handling
+pathlib2==2.3.7; python_version < "3.6"
+pathspec==0.12.1
+
+# Date/Time Handling
+python-dateutil==2.9.0
+pytz==2024.1
+
+# Additional utilities for Windows
+colorama==0.4.6; sys_platform == "win32"
+pyperclip==1.8.2
+
+# PyInstaller build optimization
+altgraph==0.17.4
+pefile==2023.2.7
+
+# Development tools (optional)
+tqdm==4.66.4
+packaging==24.1
+
+# Note: UPX compression is disabled due to availability issues
+# upx4-windows==4.2.2; sys_platform == "win32"  # Optional compression - disabled 

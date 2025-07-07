@@ -12,6 +12,9 @@ from ui.uploader_gui import S3UploaderGUI
 from pathlib import Path
 from datetime import datetime
 
+# Import resource manager for proper file handling
+from utils.resource_manager import get_config_path, resource_path
+
 # Enhanced Task Manager Integration (temporarily disabled)
 # from apply_enhanced_task_manager import apply_enhanced_task_manager
 
@@ -22,20 +25,25 @@ def main():
     app.setStyle('Fusion')
     
     try:
-        # Check if encryption files exist
-        config_enc_exists = Path("config.enc").exists()
-        key_file_exists = Path("encryption_key.txt").exists()
+        # Check if encryption files exist using resource_path
+        config_enc_path = get_config_path("config.enc")
+        key_file_path = get_config_path("encryption_key.txt")
+        
+        config_enc_exists = config_enc_path.exists()
+        key_file_exists = key_file_path.exists()
         
         if config_enc_exists and key_file_exists:
-            print("Encryption files found: config.enc and encryption_key.txt")
+            print(f"Encryption files found: {config_enc_path} and {key_file_path}")
         else:
             if not config_enc_exists:
-                print("Warning: config.enc file not found")
+                print(f"Warning: config.enc file not found at {config_enc_path}")
             if not key_file_exists:
-                print("Warning: encryption_key.txt file not found")
+                print(f"Warning: encryption_key.txt file not found at {key_file_path}")
             QMessageBox.critical(None, "Configuration Error", 
-                               "Required configuration files are missing.\n\n"
-                               "Please ensure both config.enc and encryption_key.txt exist in the application directory.")
+                               f"Required configuration files are missing.\n\n"
+                               f"Please ensure both config.enc and encryption_key.txt exist:\n"
+                               f"- config.enc: {config_enc_path}\n"
+                               f"- encryption_key.txt: {key_file_path}")
             return 1
         
         # Initialize database manager

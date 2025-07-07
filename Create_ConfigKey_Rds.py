@@ -347,6 +347,18 @@ class AwsCredentialsEncryptorGUI:
             key_path = device_folder / 'encryption_key.txt'
             key_path.write_text(key.decode())
             
+            # Also save copies in the root directory for the application to find
+            from pathlib import Path
+            root_config_path = Path('config.enc')
+            root_key_path = Path('encryption_key.txt')
+            
+            try:
+                root_config_path.write_bytes(encrypted_data)
+                root_key_path.write_text(key.decode())
+                self.update_status("Also saved copies in application root directory")
+            except Exception as e:
+                self.update_status(f"Warning: Could not save to root directory: {e}")
+            
             # Display the key
             self.key_display.delete("1.0", tk.END)
             self.key_display.insert(tk.END, key.decode())

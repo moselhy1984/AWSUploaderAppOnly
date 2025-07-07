@@ -25,6 +25,7 @@ from ui.image_preview_dialog import ImagePreviewDialog
 from ui.task_editor_dialog import TaskEditorDialog
 from ui.enhanced_progress_bars import EnhancedProgressBars
 from utils.background_uploader import BackgroundUploader
+from utils.resource_manager import get_icon_path
 import getmac
 import uuid
 import re
@@ -256,17 +257,13 @@ class S3UploaderGUI(QMainWindow):
         # (The rest of the original init_ui code would go here)
         self.setGeometry(100, 100, 800, 450)
         
-        # Set application icon
-        icon_path = os.path.join(os.path.dirname(__file__), '..', 'Uploadicon.ico')
-        if os.path.exists(icon_path):
-            self.setWindowIcon(QIcon(icon_path))
+        # Set application icon using resource_path
+        from utils.resource_manager import get_icon_path
+        icon_path = get_icon_path('Uploadicon.ico')
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
         else:
-            # Try alternative path
-            icon_path = 'Uploadicon.ico'
-            if os.path.exists(icon_path):
-                self.setWindowIcon(QIcon(icon_path))
-            else:
-                print(f"Warning: Icon file not found at {icon_path}")
+            print(f"Warning: Application icon not found at {icon_path}")
         
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -984,16 +981,12 @@ class S3UploaderGUI(QMainWindow):
     def setup_tray(self):
         """Setup system tray icon and menu"""
         self.tray_icon = QSystemTrayIcon(self)
-        icon_path = os.path.join(os.path.dirname(__file__), '..', 'Uploadicon.ico')
-        if os.path.exists(icon_path):
-            self.tray_icon.setIcon(QIcon(icon_path))
+        # Set tray icon using resource_path
+        tray_icon_path = get_icon_path('Uploadicon.ico')
+        if tray_icon_path.exists():
+            self.tray_icon.setIcon(QIcon(str(tray_icon_path)))
         else:
-            # Try alternative path
-            icon_path = 'Uploadicon.ico'
-            if os.path.exists(icon_path):
-                self.tray_icon.setIcon(QIcon(icon_path))
-            else:
-                print(f"Warning: Icon file not found at {icon_path}")
+            print(f"Warning: Tray icon not found at {tray_icon_path}")
         
         # Create tray menu
         tray_menu = QMenu()
