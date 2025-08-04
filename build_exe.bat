@@ -1,233 +1,449 @@
-@echo off
-title AWS Uploader - EXE Builder
-chcp 65001 >nul 2>&1
-echo ========================================
-echo 🏗️  AWS Uploader - EXE Builder
-echo ========================================
-echo Building standalone executable for Windows...
-echo.
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+AWS Uploader - EXE Builder Script
+Build standalone executable for Windows distribution
+"""
 
-:: Check if Python is available
-python --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo ❌ ERROR: Python is not installed or not in PATH
-    echo.
-    echo Please install Python first from python.org
-    echo Make sure to check "Add Python to PATH" during installation
-    echo.
-    pause
-    exit /b 1
-)
+import os
+import sys
+import shutil
+import subprocess
+import platform
+from pathlib import Path
+from datetime import datetime
 
-echo ✅ Python found
-python --version
-
-:: Set environment for better encoding
-set PYTHONIOENCODING=utf-8
-set PYTHONUNBUFFERED=1
-
-:: Check if virtual environment exists and activate it
-if exist "venv\Scripts\activate.bat" (
-    echo 🔄 Activating virtual environment...
-    call venv\Scripts\activate.bat
-    if %errorlevel% neq 0 (
-        echo ❌ Failed to activate virtual environment
-        goto create_venv
-    )
-    echo ✅ Virtual environment activated
-) else (
-    :create_venv
-    echo 🔄 Creating virtual environment...
-    python -m venv venv
-    if %errorlevel% neq 0 (
-        echo ❌ ERROR: Failed to create virtual environment
-        echo.
-        echo Possible solutions:
-        echo - Run as Administrator
-        echo - Check if Python is properly installed
-        echo - Make sure you have write permissions
-        echo.
-        pause
-        exit /b 1
-    )
-    echo ✅ Virtual environment created
-    call venv\Scripts\activate.bat
-    echo ✅ Virtual environment activated
-)
-
-:: Upgrade pip and essential tools
-echo 🔧 Upgrading pip and build tools...
-python -m pip install --upgrade pip setuptools wheel
-if %errorlevel% neq 0 (
-    echo ⚠️  Warning: Failed to upgrade pip, continuing anyway...
-)
-
-:: Check if requirements file exists
-if not exist "requirements-exe-build.txt" (
-    echo ❌ ERROR: requirements-exe-build.txt not found
-    echo.
-    echo This file is required for EXE building.
-    echo Please make sure you have the complete project files.
-    echo.
-    pause
-    exit /b 1
-)
-
-:: Install EXE build requirements
-echo 📦 Installing EXE build dependencies...
-echo This may take a few minutes...
-python -m pip install -r requirements-exe-build.txt
-if %errorlevel% neq 0 (
-    echo ❌ ERROR: Failed to install some dependencies
-    echo.
-    echo Trying alternative installation methods...
-    
-    :: Try with --user flag
-    echo 🔄 Trying installation with --user flag...
-    python -m pip install -r requirements-exe-build.txt --user
-    if %errorlevel% neq 0 (
-        echo ❌ ERROR: Alternative installation also failed
-        echo.
-        echo Please check:
-        echo - Internet connection
-        echo - Firewall/antivirus settings
-        echo - Python installation
-        echo.
-        echo You can try running this manually:
-        echo pip install -r requirements-exe-build.txt
-        echo.
-        pause
-        exit /b 1
-    )
-)
-
-echo ✅ Dependencies installed successfully
-
-:: Check essential files
-echo 🔍 Checking essential files...
-if not exist "main.py" (
-    echo ❌ ERROR: main.py not found
-    echo This is the main application file and is required for building.
-    pause
-    exit /b 1
-)
-echo ✅ main.py found
-
-if not exist "config.enc" (
-    echo ⚠️  WARNING: config.enc not found
-    echo This file will be needed for the EXE to work properly.
-)
-
-if not exist "encryption_key.txt" (
-    echo ⚠️  WARNING: encryption_key.txt not found  
-    echo This file will be needed for the EXE to work properly.
-)
-
-if not exist "Uploadicon.ico" (
-    echo ⚠️  WARNING: Uploadicon.ico not found
-    echo EXE will be built without an icon.
-)
-
-:: Check essential directories
-for %%d in (ui database utils) do (
-    if not exist "%%d" (
-        echo ❌ ERROR: %%d directory not found
-        echo This directory is required for the application.
-        pause
-        exit /b 1
-    )
-    echo ✅ %%d directory found
-)
-
-:: Run the build script
-echo.
-echo 🚀 Starting EXE build process...
-echo ==============================
-echo.
-echo This will take 5-15 minutes depending on your system.
-echo Please be patient and do not close this window.
-echo.
-
-python build_exe.py
-set BUILD_EXIT_CODE=%errorlevel%
-
-:: Check build results
-echo.
-echo ========================================
-if %BUILD_EXIT_CODE% equ 0 (
-    echo ✅ BUILD COMPLETED SUCCESSFULLY!
-    echo ========================================
-    echo.
-    
-    if exist "dist\AWS_Uploader.exe" (
-        echo 📦 EXE created: dist\AWS_Uploader.exe
+class ExeBuilder:
+    def __init__(self):
+        self.project_dir = Path.cwd()
+        self.build_dir = self.project_dir / "build"
+        self.dist_dir = self.project_dir / "dist"
+        self.spec_file = self.project_dir / "aws_uploader.spec"
+        self.exe_name = "AWS_Uploader"
+        self.version = "1.0.0"
         
-        :: Get file size
-        for %%F in ("dist\AWS_Uploader.exe") do (
-            set /a "size_mb=%%~zF / 1024 / 1024"
-        )
-        echo 📊 EXE Size: !size_mb! MB (approximately)
-    )
+    def print_header(self):
+        """Print build header"""
+        print("=" * 70)
+        print("🏗️  AWS Uploader - EXE Builder")
+        print("=" * 70)
+        print(f"📁 Project Directory: {self.project_dir}")
+        print(f"🎯 Target EXE: {self.exe_name}.exe")
+        print(f"📊 Version: {self.version}")
+        print(f"🖥️  Platform: {platform.system()} {platform.release()}")
+        print(f"🐍 Python: {sys.version.split()[0]}")
+        print(f"📅 Build Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print()
     
-    if exist "AWS_Uploader_Portable" (
-        echo 📁 Portable package: AWS_Uploader_Portable\
-        echo.
-        echo 💡 The portable package contains everything needed for distribution:
-        echo    - AWS_Uploader.exe
-        echo    - config.enc
-        echo    - encryption_key.txt  
-        echo    - Uploadicon.ico
-        echo    - README.txt
-    )
+    def check_requirements(self):
+        """Check build requirements"""
+        print("🔍 Checking build requirements...")
+        
+        # Check Python version
+        if sys.version_info < (3, 8):
+            print("❌ Python 3.8+ required")
+            return False
+        print(f"✅ Python {sys.version.split()[0]} compatible")
+        
+        # Check PyInstaller
+        try:
+            import PyInstaller
+            print(f"✅ PyInstaller {PyInstaller.__version__} found")
+        except ImportError:
+            print("❌ PyInstaller not found, installing...")
+            try:
+                subprocess.run([sys.executable, '-m', 'pip', 'install', 'pyinstaller'], check=True)
+                print("✅ PyInstaller installed successfully")
+            except subprocess.CalledProcessError:
+                print("❌ Failed to install PyInstaller")
+                return False
+        
+        # Check main.py
+        if not (self.project_dir / "main.py").exists():
+            print("❌ main.py not found")
+            return False
+        print("✅ main.py found")
+        
+        # Check config files
+        required_files = [
+            ('config.enc', 'Configuration file'),
+            ('encryption_key.txt', 'Encryption key'),
+            ('Uploadicon.ico', 'Application icon')
+        ]
+        
+        for filename, description in required_files:
+            if (self.project_dir / filename).exists():
+                print(f"✅ {filename} found - {description}")
+            else:
+                print(f"⚠️  {filename} not found - {description}")
+        
+        # Check directories
+        for dirname in ['ui', 'database', 'utils']:
+            if (self.project_dir / dirname).exists():
+                print(f"✅ {dirname}/ directory found")
+            else:
+                print(f"❌ {dirname}/ directory not found")
+                return False
+        
+        return True
     
-    echo.
-    echo 🎯 Next Steps:
-    echo 1. Test the EXE: dist\AWS_Uploader.exe
-    echo 2. For distribution: Use AWS_Uploader_Portable folder
-    echo 3. Make sure to include all files when distributing
-    echo.
+    def install_dependencies(self):
+        """Install build dependencies"""
+        print("📦 Installing build dependencies...")
+        
+        requirements_file = self.project_dir / "requirements-exe-build.txt"
+        if not requirements_file.exists():
+            print("❌ requirements-exe-build.txt not found")
+            return False
+        
+        try:
+            # Update pip first
+            subprocess.run([sys.executable, '-m', 'pip', 'install', '--upgrade', 'pip'], check=True)
+            
+            # Install requirements
+            subprocess.run([sys.executable, '-m', 'pip', 'install', '-r', str(requirements_file)], check=True)
+            
+            print("✅ Dependencies installed successfully")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Failed to install dependencies: {e}")
+            return False
     
-    :: Ask if user wants to test the EXE
-    set /p test_exe="Do you want to test the EXE now? (y/n): "
-    if /i "!test_exe!"=="y" (
-        echo 🧪 Testing EXE...
-        if exist "dist\AWS_Uploader.exe" (
-            start "" "dist\AWS_Uploader.exe"
-            echo ✅ EXE launched for testing
-        ) else (
-            echo ❌ EXE file not found for testing
-        )
-    )
+    def clean_build(self):
+        """Clean previous build artifacts"""
+        print("🧹 Cleaning previous builds...")
+        
+        dirs_to_clean = [self.build_dir, self.dist_dir]
+        for dir_path in dirs_to_clean:
+            if dir_path.exists():
+                shutil.rmtree(dir_path)
+                print(f"🗑️  Removed {dir_path}")
+        
+        if self.spec_file.exists():
+            self.spec_file.unlink()
+            print(f"🗑️  Removed {self.spec_file}")
     
-    :: Ask if user wants to open the portable folder
-    set /p open_folder="Do you want to open the portable package folder? (y/n): "
-    if /i "!open_folder!"=="y" (
-        if exist "AWS_Uploader_Portable" (
-            explorer "AWS_Uploader_Portable"
-            echo ✅ Opened portable package folder
-        ) else (
-            echo ❌ Portable package folder not found
-        )
-    )
-    
-) else (
-    echo ❌ BUILD FAILED!
-    echo ========================================
-    echo.
-    echo The build process encountered errors.
-    echo Please check the output above for details.
-    echo.
-    echo Common solutions:
-    echo - Make sure all required files are present
-    echo - Check internet connection for downloading dependencies
-    echo - Try running as Administrator
-    echo - Check available disk space (need 2-5 GB free)
-    echo - Temporarily disable antivirus software
-    echo.
-    echo If problems persist, check the documentation or contact support.
+    def create_spec_file(self):
+        """Create PyInstaller spec file"""
+        print("📝 Creating PyInstaller spec file...")
+        
+        spec_content = f'''# -*- mode: python ; coding: utf-8 -*-
+
+a = Analysis(
+    ['main.py'],
+    pathex=['{self.project_dir}'],
+    binaries=[],
+    datas=[
+        ('Uploadicon.ico', '.'),
+        ('downloadicon.ico', '.'),
+        ('ui', 'ui'),
+        ('database', 'database'),
+        ('utils', 'utils'),
+        ('config', 'config'),
+    ],
+    hiddenimports=[
+        # PyQt5 Components
+        'PyQt5.QtCore',
+        'PyQt5.QtGui',
+        'PyQt5.QtWidgets',
+        'PyQt5.sip',
+        'PyQt5.QtCore.Qt',
+        'PyQt5.QtCore.QThread',
+        'PyQt5.QtCore.pyqtSignal',
+        'PyQt5.QtCore.QDate',
+        'PyQt5.QtCore.QSize',
+        'PyQt5.QtGui.QPixmap',
+        'PyQt5.QtGui.QFont',
+        'PyQt5.QtGui.QIcon',
+        
+        # Database Components
+        'mysql.connector',
+        'mysql.connector.pooling',
+        'mysql.connector.errors',
+        'mysql.connector.locales',
+        'mysql.connector.plugins',
+        'mysql.connector.plugins.caching_sha2_password',
+        'mysql.connector.plugins.mysql_native_password',
+        'PyMySQL',
+        
+        # AWS Components
+        'boto3',
+        'botocore',
+        'botocore.config',
+        'botocore.exceptions',
+        's3transfer',
+        'jmespath',
+        
+        # System and Hardware
+        'psutil',
+        'getmac',
+        'wmi',
+        'pywin32',
+        'pywin32-ctypes',
+        'comtypes',
+        
+        # Cryptography and Security
+        'cryptography',
+        'cryptography.fernet',
+        'cryptography.hazmat',
+        'certifi',
+        
+        # Network and HTTP
+        'requests',
+        'urllib3',
+        'idna',
+        
+        # File Operations
+        'pathlib',
+        'pathlib2',
+        'pathspec',
+        'shutil',
+        'tempfile',
+        'os',
+        'sys',
+        'platform',
+        
+        # Date/Time
+        'datetime',
+        'date',
+        'time',
+        'python-dateutil',
+        'pytz',
+        
+        # Threading and Concurrency
+        'threading',
+        'queue',
+        'contextlib',
+        
+        # Data Processing
+        'json',
+        'uuid',
+        'hashlib',
+        'base64',
+        'configparser',
+        'xml.etree.ElementTree',
+        
+        # Windows Specific
+        'colorama',
+        'pyperclip',
+        
+        # Build Tools
+        'altgraph',
+        'pefile',
+        'tqdm',
+        'packaging',
+        
+        # Application Specific Modules
+        'ui.uploader_gui',
+        'ui.login_dialog',
+        'ui.settings_dialog',
+        'ui.photographers_dialog',
+        'ui.order_selector_dialog',
+        'ui.image_preview_dialog',
+        'ui.s3_image_preview_dialog',
+        'ui.full_image_dialog',
+        'ui.task_editor_dialog',
+        'database.db_manager',
+        'database.enhanced_pool',
+        'utils.resource_manager',
+        'utils.background_uploader',
+        'utils.circuit_breaker',
+        'utils.memory_card_detector',
+        'utils.memory_manager',
+        'utils.smart_file_copier',
+        'utils.windows_startup',
+        'config.secure_config',
+        'config.settings',
+    ],
+    hookspath=[],
+    hooksconfig={{}},
+    runtime_hooks=[],
+    excludes=[
+        'tkinter',
+        'matplotlib',
+        'pandas',
+        'numpy',
+        'scipy',
+        'PIL',
+        'IPython',
+        'jupyter',
+        'notebook',
+        'test',
+        'tests',
+        'unittest',
+        'doctest',
+        'pdb',
+        'profile',
+        'cProfile',
+        'trace',
+        'pstats',
+    ],
+    noarchive=False,
 )
 
-echo.
-echo ========================================
-echo Press any key to close this window...
-pause >nul 
+pyz = PYZ(a.pure, a.zipped_data, cipher=None)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name='{self.exe_name}',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon='Uploadicon.ico',
+)
+'''
+        
+        with open(self.spec_file, 'w', encoding='utf-8') as f:
+            f.write(spec_content)
+        
+        print(f"✅ Spec file created: {self.spec_file}")
+        return True
+    
+    def build_exe(self):
+        """Build the executable"""
+        print("🔨 Building executable...")
+        print("⏳ This may take 5-15 minutes...")
+        
+        try:
+            cmd = [sys.executable, '-m', 'PyInstaller', '--clean', '--noconfirm', str(self.spec_file)]
+            
+            subprocess.run(cmd, check=True)
+            print("✅ Build completed successfully!")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Build failed: {e}")
+            return False
+    
+    def create_portable_package(self):
+        """Create portable package"""
+        print("📦 Creating portable package...")
+        
+        exe_path = self.dist_dir / f"{self.exe_name}.exe"
+        if not exe_path.exists():
+            print(f"❌ EXE not found: {exe_path}")
+            return False
+        
+        # Create portable directory
+        portable_dir = self.project_dir / f"{self.exe_name}_Portable"
+        if portable_dir.exists():
+            shutil.rmtree(portable_dir)
+        portable_dir.mkdir()
+        
+        # Copy files
+        shutil.copy2(exe_path, portable_dir / f"{self.exe_name}.exe")
+        print(f"✅ Copied {self.exe_name}.exe")
+        
+        # Copy required files
+        required_files = ['config.enc', 'encryption_key.txt', 'Uploadicon.ico', 'downloadicon.ico']
+        for filename in required_files:
+            src = self.project_dir / filename
+            if src.exists():
+                shutil.copy2(src, portable_dir / filename)
+                print(f"✅ Copied {filename}")
+        
+        # Create README
+        readme_content = f"""# {self.exe_name} - Portable Version
+
+## Quick Start:
+1. Double-click {self.exe_name}.exe to run
+2. Make sure config.enc and encryption_key.txt are in the same folder
+
+## Required Files:
+- {self.exe_name}.exe (main application)
+- config.enc (configuration file)
+- encryption_key.txt (encryption key)
+- Uploadicon.ico (application icon)
+
+## Troubleshooting:
+- If Windows Defender blocks the exe, add it to exclusions
+- Run as Administrator if you encounter permission issues
+- Make sure all config files are present
+
+Build Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+        
+        with open(portable_dir / "README.txt", 'w', encoding='utf-8') as f:
+            f.write(readme_content)
+        
+        print(f"✅ Portable package created: {portable_dir}")
+        return True
+    
+    def run_build(self):
+        """Run the complete build process"""
+        self.print_header()
+        
+        steps = [
+            ("Checking requirements", self.check_requirements),
+            ("Installing dependencies", self.install_dependencies),
+            ("Cleaning previous builds", self.clean_build),
+            ("Creating spec file", self.create_spec_file),
+            ("Building executable", self.build_exe),
+            ("Creating portable package", self.create_portable_package),
+        ]
+        
+        for step_name, step_func in steps:
+            print(f"\n📋 {step_name}...")
+            try:
+                if not step_func():
+                    print(f"❌ {step_name} failed")
+                    return False
+                print(f"✅ {step_name} completed")
+            except Exception as e:
+                print(f"❌ {step_name} failed with error: {e}")
+                return False
+        
+        # Print summary
+        print("\n" + "=" * 70)
+        print("🎉 BUILD COMPLETED SUCCESSFULLY!")
+        print("=" * 70)
+        
+        exe_path = self.dist_dir / f"{self.exe_name}.exe"
+        portable_dir = self.project_dir / f"{self.exe_name}_Portable"
+        
+        print(f"📦 Standalone EXE: {exe_path}")
+        print(f"📁 Portable Package: {portable_dir}")
+        print()
+        print("🚀 Ready for distribution!")
+        print()
+        print("📋 Next steps:")
+        print("1. Test the EXE on your local machine")
+        print("2. Test on a different Windows machine")
+        print("3. Distribute the portable package")
+        print()
+        print("⚠️  Important: Make sure config.enc and encryption_key.txt")
+        print("   are included with the distributed files!")
+        
+        return True
+
+def main():
+    """Main entry point"""
+    if platform.system() != 'Windows':
+        print("⚠️  This build script is designed for Windows")
+        print("   You can still run it, but the EXE will be for Windows only")
+    
+    builder = ExeBuilder()
+    success = builder.run_build()
+    
+    if not success:
+        print("\n❌ Build failed. Check the errors above.")
+        sys.exit(1)
+    
+    print("\nPress Enter to continue...")
+    input()
+
+if __name__ == '__main__':
+    main() 
